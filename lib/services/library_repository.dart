@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 
 import '../models/book.dart';
+import 'epub_importer.dart';
 import 'text_parser.dart';
 
 /// Books live as plain files under `<documents>/books/<bookId>/`:
@@ -45,6 +46,19 @@ class LibraryRepository {
     required String fallbackTitle,
   }) async {
     final parsed = parseRawText(rawText, fallbackTitle: fallbackTitle);
+    return _saveParsedBook(parsed);
+  }
+
+  Future<Book> importFile(File file) async {
+    final name = file.uri.pathSegments.last;
+    final fallbackTitle = name.replaceAll(RegExp(r'\.\w+$'), '');
+    final parsed = name.toLowerCase().endsWith('.epub')
+        ? parseEpub(await file.readAsBytes(), fallbackTitle: fallbackTitle)
+        : parseRawText(await _readAsText(file), fallbackTitle: fallbackTitle);
+    return _saveParsedBook(parsed);
+  }
+
+  Future<Book> _saveParsedBook(ParsedBook parsed) async {
     final id = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
     final dir = Directory('${(await _booksDir()).path}/$id');
     dir.createSync(recursive: true);
@@ -65,19 +79,12 @@ class LibraryRepository {
     final book = Book(
       id: id,
       title: parsed.title,
-      author: '',
+      author: parsed.author,
       importedAt: DateTime.now(),
       chapters: chapters,
     );
     File('${dir.path}/book.json').writeAsStringSync(book.encode());
     return book;
-  }
-
-  Future<Book> importFile(File file) async {
-    final raw = await _readAsText(file);
-    final name = file.uri.pathSegments.last;
-    final title = name.replaceAll(RegExp(r'\.(txt|md|text)$', caseSensitive: false), '');
-    return importText(rawText: raw, fallbackTitle: title);
   }
 
   Future<String> loadChapterText(Book book, int chapterIndex) async {

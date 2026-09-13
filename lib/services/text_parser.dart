@@ -7,8 +7,9 @@ class ParsedChapter {
 }
 
 class ParsedBook {
-  ParsedBook({required this.title, required this.chapters});
+  ParsedBook({required this.title, required this.chapters, this.author = ''});
   final String title;
+  final String author;
   final List<ParsedChapter> chapters;
 }
 

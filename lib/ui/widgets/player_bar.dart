@@ -45,10 +45,11 @@ class PlayerBar extends StatelessWidget {
                         ),
                       )
                     : Text(
-                        'Chương ${controller.chapterIndex + 1}/'
-                        '${controller.book.chapterCount} - '
+                        '${controller.chapter.title} · '
                         '${(controller.chapterFraction * 100).round()}%',
                         textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.bodyMedium,
                       ),
               ),

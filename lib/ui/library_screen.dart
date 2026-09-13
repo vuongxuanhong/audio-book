@@ -77,15 +77,19 @@ class LibraryScreen extends StatelessWidget {
     final controller = context.read<LibraryController>();
     final messenger = ScaffoldMessenger.of(context);
     final picked = await FilePicker.pickFile(
-      dialogTitle: 'Chọn tệp truyện (.txt)',
+      dialogTitle: 'Chọn tệp truyện (.txt, .epub)',
       type: FileType.custom,
-      allowedExtensions: ['txt', 'text', 'md'],
+      allowedExtensions: ['txt', 'text', 'md', 'epub'],
     );
     final path = picked?.path;
     if (path == null) return;
+    if (!context.mounted) return;
 
     try {
-      final book = await controller.importFile(File(path));
+      final book = await _runWithProgress(
+        context,
+        () => controller.importFile(File(path)),
+      );
       messenger.showSnackBar(SnackBar(
         content: Text('Đã nhập “${book.title}” · ${book.chapterCount} chương'),
       ));
@@ -99,10 +103,56 @@ Future<void> _importSample(BuildContext context) async {
   final controller = context.read<LibraryController>();
   final messenger = ScaffoldMessenger.of(context);
   final text = await rootBundle.loadString('assets/sample/truyen_mau.txt');
-  final book = await controller.importText(text, 'Truyện mẫu');
+  if (!context.mounted) return;
+  final book = await _runWithProgress(
+    context,
+    () => controller.importText(text, 'Truyện mẫu'),
+  );
   messenger.showSnackBar(
     SnackBar(content: Text('Đã nhập “${book.title}”')),
   );
+}
+
+/// Parsing a whole book (splitting into chapters/sentences, or unzipping an
+/// EPUB) can take a couple of seconds for a long book — without feedback that
+/// reads as the app having frozen. Blocks input with a small progress dialog
+/// for the duration of [action].
+Future<T> _runWithProgress<T>(
+  BuildContext context,
+  Future<T> Function() action,
+) async {
+  showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => const _ImportProgressDialog(),
+  );
+  try {
+    return await action();
+  } finally {
+    if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
+  }
+}
+
+class _ImportProgressDialog extends StatelessWidget {
+  const _ImportProgressDialog();
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      content: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(
+            width: 22,
+            height: 22,
+            child: CircularProgressIndicator(strokeWidth: 3),
+          ),
+          const SizedBox(width: 20),
+          Text('Đang nhập truyện…', style: Theme.of(context).textTheme.bodyMedium),
+        ],
+      ),
+    );
+  }
 }
 
 class _BookTile extends StatelessWidget {

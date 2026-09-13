@@ -305,12 +305,14 @@ class _ReaderViewState extends State<_ReaderView> {
               if (controller.status == ReaderStatus.ready &&
                   !controller.isPlaying)
                 Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 24, vertical: 8),
                   child: Text(
-                    'Chương ${controller.chapterIndex + 1}/'
-                    '${controller.book.chapterCount} - '
+                    '${controller.chapter.title} · '
                     '${(controller.chapterFraction * 100).round()}%',
                     textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                 ),
