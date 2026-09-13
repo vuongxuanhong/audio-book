@@ -9,6 +9,7 @@ import '../models/book.dart';
 import '../models/sentence.dart';
 import '../services/library_repository.dart';
 import '../services/paginator.dart';
+import '../services/screen_security.dart';
 import '../services/settings_store.dart';
 import '../services/voice_repository.dart';
 import '../state/app_settings.dart';
@@ -55,6 +56,12 @@ class _ReaderViewState extends State<_ReaderView> {
   bool _chromeVisible = false;
 
   ReaderController? _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(enableScreenCaptureProtection());
+  }
 
   @override
   void didChangeDependencies() {
@@ -174,6 +181,7 @@ class _ReaderViewState extends State<_ReaderView> {
   @override
   void dispose() {
     _controller?.highlightTick.removeListener(_onHighlightMoved);
+    unawaited(disableScreenCaptureProtection());
     super.dispose();
   }
 

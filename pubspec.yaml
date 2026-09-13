@@ -45,6 +45,7 @@ dependencies:
   real_page_flip: ^2.2.9
   xml: ^6.6.1
   html: ^0.15.7
+  screen_protector: ^1.5.3
 
 dev_dependencies:
   flutter_test:
