@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/material.dart' show ThemeMode;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/reading_progress.dart';
@@ -26,6 +27,7 @@ class SettingsStore {
   static const _kVoiceId = 'tts.voiceId';
   static const _kSpeakerPrefix = 'tts.speaker.';
   static const _kLastBookId = 'library.lastBookId';
+  static const _kThemeMode = 'app.themeMode';
 
   ReadingProgress? progressFor(String bookId) {
     final raw = _prefs.getString('$_kProgressPrefix$bookId');
@@ -90,4 +92,13 @@ class SettingsStore {
 
   String? get lastBookId => _prefs.getString(_kLastBookId);
   Future<void> setLastBookId(String id) => _prefs.setString(_kLastBookId, id);
+
+  /// Stored by name rather than index — safe even if `ThemeMode`'s member
+  /// order ever changes. Falls back to `system` for anything unrecognised.
+  ThemeMode get themeMode => ThemeMode.values.firstWhere(
+        (m) => m.name == _prefs.getString(_kThemeMode),
+        orElse: () => ThemeMode.system,
+      );
+  Future<void> setThemeMode(ThemeMode mode) =>
+      _prefs.setString(_kThemeMode, mode.name);
 }

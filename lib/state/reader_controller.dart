@@ -1,13 +1,15 @@
 import 'dart:async';
 
-import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:just_audio/just_audio.dart';
 
 import '../models/book.dart';
 import '../models/reading_progress.dart';
 import '../models/sentence.dart';
 import '../services/library_repository.dart';
+import '../services/paginator.dart';
 import '../services/settings_store.dart';
 import '../services/text_parser.dart' as parser;
 import '../services/tts_engine.dart';
@@ -51,6 +53,13 @@ class ReaderController extends ChangeNotifier {
   List<Paragraph> _paragraphs = const [];
   List<Sentence> _sentences = const [];
 
+  List<PageRange> _pages = const [PageRange(startSentence: 0, endSentence: 0)];
+  Size? _lastLayoutSize;
+  int _pagesForChapter = -1;
+  double? _paginatedFontSize;
+  double? _paginatedLineHeight;
+  TextScaler _paginatedTextScaler = TextScaler.noScaling;
+
   int _cursor = 0;
   bool _playing = false;
   bool _buffering = false;
@@ -84,6 +93,26 @@ class ReaderController extends ChangeNotifier {
   List<Paragraph> get paragraphs => _paragraphs;
   List<Sentence> get sentences => _sentences;
   int get cursor => _cursor;
+
+  List<PageRange> get pages => _pages;
+  int get pageCount => _pages.length;
+
+  /// The page whose range contains [_cursor].
+  int get currentPageIndex {
+    var lo = 0;
+    var hi = _pages.length - 1;
+    while (lo < hi) {
+      final mid = (lo + hi) >> 1;
+      if (_pages[mid].endSentence <= _cursor) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    return lo;
+  }
+
+  int get pagesLeftInChapter => _pages.length - currentPageIndex - 1;
   bool get isPlaying => _playing;
   bool get isBuffering => _buffering;
   bool get voiceMissing => _voiceMissing;
@@ -121,6 +150,49 @@ class ReaderController extends ChangeNotifier {
   double get chapterFraction =>
       _sentences.isEmpty ? 0 : (_cursor / _sentences.length).clamp(0.0, 1.0);
 
+  /// Called by the reader widget on every build with the space available for
+  /// text and the device's current text scaling. Repaginates only when one
+  /// of those — or the open chapter — actually changed, so most calls are
+  /// free.
+  void layout(Size size, {TextScaler textScaler = TextScaler.noScaling}) {
+    final fontSize = _settings.fontSize;
+    final lineHeight = _settings.lineHeight;
+    if (_lastLayoutSize == size &&
+        _pagesForChapter == _chapterIndex &&
+        _paginatedFontSize == fontSize &&
+        _paginatedLineHeight == lineHeight &&
+        _paginatedTextScaler == textScaler) {
+      return;
+    }
+    _lastLayoutSize = size;
+    _pagesForChapter = _chapterIndex;
+    _paginatedFontSize = fontSize;
+    _paginatedLineHeight = lineHeight;
+    _paginatedTextScaler = textScaler;
+    _repaginate(size, textScaler);
+  }
+
+  void _repaginate(Size size, TextScaler textScaler) {
+    _pages = paginate(
+      paragraphs: _paragraphs,
+      pageSize: size,
+      style: TextStyle(
+        fontSize: _settings.fontSize,
+        height: _settings.lineHeight,
+      ),
+      textScaler: textScaler,
+    );
+    if (_pages.isEmpty) {
+      _pages = const [PageRange(startSentence: 0, endSentence: 0)];
+    }
+    // `layout()` is typically called from a LayoutBuilder while Flutter is in
+    // the middle of laying out this very frame — notifying synchronously
+    // there would try to rebuild widgets mid-layout. Deferring to the next
+    // frame is safe from every call site and the one-frame delay isn't
+    // noticeable.
+    SchedulerBinding.instance.addPostFrameCallback((_) => _safeNotify());
+  }
+
   Future<void> _init() async {
     final saved = _store.progressFor(_book.id);
     final startChapter =
@@ -130,7 +202,7 @@ class ReaderController extends ChangeNotifier {
     unawaited(_prepareVoice());
   }
 
-  Future<void> _loadChapter(int index, {int sentenceIndex = 0}) async {
+  Future<void> _loadChapter(int index, {int sentenceIndex = 0, bool atEnd = false}) async {
     _status = ReaderStatus.loading;
     _safeNotify();
     try {
@@ -140,7 +212,9 @@ class ReaderController extends ChangeNotifier {
       _sentences = [
         for (final p in _paragraphs) ...p.sentences,
       ];
-      _cursor = sentenceIndex.clamp(0, _sentences.isEmpty ? 0 : _sentences.length - 1);
+      _cursor = atEnd
+          ? (_sentences.isEmpty ? 0 : _sentences.length - 1)
+          : sentenceIndex.clamp(0, _sentences.isEmpty ? 0 : _sentences.length - 1);
       _lastSpokenParagraph = null;
       _pendingBeat = false;
       _status = ReaderStatus.ready;
@@ -187,11 +261,15 @@ class ReaderController extends ChangeNotifier {
     if (_player.speed != _settings.speed) {
       unawaited(_player.setSpeed(_settings.speed));
     }
+    // Font size/line height change how much text fits on a page; repaginate
+    // with whatever size and text scale the reader last reported.
+    final size = _lastLayoutSize;
+    if (size != null) layout(size, textScaler: _paginatedTextScaler);
   }
 
-  Future<void> openChapter(int index) async {
+  Future<void> openChapter(int index, {bool atEnd = false}) async {
     await stop();
-    await _loadChapter(index);
+    await _loadChapter(index, atEnd: atEnd);
     _saveProgressNow();
   }
 
@@ -201,8 +279,10 @@ class ReaderController extends ChangeNotifier {
     }
   }
 
-  Future<void> previousChapter() async {
-    if (_chapterIndex > 0) await openChapter(_chapterIndex - 1);
+  /// [atEnd] lands on the previous chapter's last page instead of its first —
+  /// what swiping backward past the first page of a chapter should feel like.
+  Future<void> previousChapter({bool atEnd = false}) async {
+    if (_chapterIndex > 0) await openChapter(_chapterIndex - 1, atEnd: atEnd);
   }
 
   Future<void> toggle() => _playing ? pause() : play();
@@ -394,16 +474,6 @@ class ReaderController extends ChangeNotifier {
     if (wasPlaying && keepPlaying) await play();
   }
 
-  Future<void> skipSentence(int delta) async {
-    var target = _cursor + delta;
-    while (target > 0 &&
-        target < _sentences.length &&
-        !_sentences[target].isSpeakable) {
-      target += delta.sign;
-    }
-    await jumpTo(target);
-  }
-
   /// Warms the next couple of sentences so the gap between clips stays short.
   Future<void> _prefetch(int from) async {
     var count = 0;
@@ -439,24 +509,19 @@ class ReaderController extends ChangeNotifier {
     )));
   }
 
-  /// Called by the reader when the user scrolls by hand, so closing the book —
-  /// or pressing play — picks up from what they were looking at rather than
-  /// from where audio happened to stop.
-  void noteVisibleRange(int firstVisible, int lastVisible) {
+  /// Called by the reader when the user swipes to a page by hand. While
+  /// paused this becomes the new reading position; while playing it's just a
+  /// peek and must not move the playback cursor.
+  void notePageBrowsed(int pageIndex) {
     if (_playing || _disposed || isAutoScrolling) return;
-
-    final target = resolveBrowseCursor(
-      paragraphs: _paragraphs,
+    final target = resolvePageBrowseCursor(
+      pages: _pages,
       cursor: _cursor,
-      firstVisible: firstVisible,
-      lastVisible: lastVisible,
+      pageIndex: pageIndex,
     );
     if (target == null) return;
 
     _cursor = target;
-    // The highlight and the playback cursor must never disagree: without this
-    // the reader kept highlighting the tapped sentence while play() started
-    // somewhere else.
     _safeNotify();
     _scheduleSave();
   }
@@ -501,32 +566,22 @@ double pauseMsFor({
   return startsSentence ? sentenceMs : clauseMs;
 }
 
-/// Where a hand-scroll should leave the playback cursor, or null to leave it
-/// where it is.
+/// Where a hand-swipe to another page should leave the playback cursor, or
+/// null to leave it where it is.
 ///
 /// Kept pure so the rule is testable: an explicit choice — the sentence the
-/// user tapped — survives as long as its paragraph is still on screen, so
-/// tapping the third sentence of a paragraph never snaps back to its first.
+/// user tapped — survives as long as it's still on the page being shown, so
+/// tapping the last sentence of a page never snaps back to that page's first.
 @visibleForTesting
-int? resolveBrowseCursor({
-  required List<Paragraph> paragraphs,
+int? resolvePageBrowseCursor({
+  required List<PageRange> pages,
   required int cursor,
-  required int firstVisible,
-  required int lastVisible,
+  required int pageIndex,
 }) {
-  if (paragraphs.isEmpty) return null;
-  if (firstVisible < 0 || firstVisible >= paragraphs.length) return null;
+  if (pageIndex < 0 || pageIndex >= pages.length) return null;
 
-  final current = paragraphs
-      .expand((p) => p.sentences)
-      .firstWhereOrNull((s) => s.index == cursor);
-  if (current != null &&
-      current.paragraphIndex >= firstVisible &&
-      current.paragraphIndex <= lastVisible) {
-    return null;
-  }
-
-  final first = paragraphs[firstVisible].sentences.firstOrNull;
-  if (first == null || first.index == cursor) return null;
-  return first.index;
+  final page = pages[pageIndex];
+  if (page.contains(cursor)) return null;
+  if (page.startSentence == cursor) return null;
+  return page.startSentence;
 }

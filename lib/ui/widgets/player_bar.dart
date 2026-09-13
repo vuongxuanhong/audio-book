@@ -1,18 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../state/app_settings.dart';
 import '../../state/reader_controller.dart';
+import 'reader_settings_sheet.dart';
 
-/// The bar pinned to the bottom of the reader: play/pause, sentence and
-/// chapter skipping, speed, and a thin chapter-progress line.
+/// The bar pinned to the bottom of the reader: play/pause, chapter progress,
+/// and everything else (speed, font, pacing) tucked behind one settings
+/// button. Chapter/sentence navigation lives in the swipe gestures and the
+/// chapter picker, not as buttons here — listening only needs to start,
+/// stop, see how far along it is, and open settings.
 class PlayerBar extends StatelessWidget {
   const PlayerBar({super.key});
 
   @override
   Widget build(BuildContext context) {
     final controller = context.watch<ReaderController>();
-    final settings = context.watch<AppSettings>();
     final theme = Theme.of(context);
     final enabled =
         controller.status == ReaderStatus.ready && !controller.voiceMissing;
@@ -22,52 +24,41 @@ class PlayerBar extends StatelessWidget {
       color: theme.colorScheme.surfaceContainerHighest,
       child: SafeArea(
         top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            LinearProgressIndicator(
-              value: controller.chapterFraction,
-              minHeight: 3,
-              backgroundColor: theme.colorScheme.surfaceContainerHighest,
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
-              child: Row(
-                children: [
-                  IconButton(
-                    tooltip: 'Chương trước',
-                    icon: const Icon(Icons.skip_previous),
-                    onPressed: controller.chapterIndex > 0
-                        ? controller.previousChapter
-                        : null,
-                  ),
-                  IconButton(
-                    tooltip: 'Câu trước',
-                    icon: const Icon(Icons.fast_rewind),
-                    onPressed: enabled ? () => controller.skipSentence(-1) : null,
-                  ),
-                  const SizedBox(width: 4),
-                  _PlayButton(controller: controller, enabled: enabled),
-                  const SizedBox(width: 4),
-                  IconButton(
-                    tooltip: 'Câu tiếp',
-                    icon: const Icon(Icons.fast_forward),
-                    onPressed: enabled ? () => controller.skipSentence(1) : null,
-                  ),
-                  IconButton(
-                    tooltip: 'Chương sau',
-                    icon: const Icon(Icons.skip_next),
-                    onPressed:
-                        controller.chapterIndex + 1 < controller.book.chapterCount
-                            ? controller.nextChapter
-                            : null,
-                  ),
-                  const Spacer(),
-                  _SpeedChip(settings: settings),
-                ],
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 6, 16, 6),
+          child: Row(
+            children: [
+              _PlayButton(controller: controller, enabled: enabled),
+              const SizedBox(width: 8),
+              Expanded(
+                // Listen mode: how far along the chapter's audio is. Read
+                // mode: nothing is playing to show progress for, so this
+                // spot names the chapter instead.
+                child: controller.isPlaying
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value: controller.chapterFraction,
+                          minHeight: 6,
+                          backgroundColor:
+                              theme.colorScheme.surfaceContainerHighest,
+                        ),
+                      )
+                    : Text(
+                        'Chương ${controller.chapterIndex + 1}/'
+                        '${controller.book.chapterCount} - '
+                        '${(controller.chapterFraction * 100).round()}%',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.bodyMedium,
+                      ),
               ),
-            ),
-          ],
+              IconButton(
+                tooltip: 'Cài đặt',
+                icon: const Icon(Icons.tune),
+                onPressed: () => showReaderSettingsSheet(context),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -104,41 +95,4 @@ class _PlayButton extends StatelessWidget {
       ),
     );
   }
-}
-
-class _SpeedChip extends StatelessWidget {
-  const _SpeedChip({required this.settings});
-
-  final AppSettings settings;
-
-  @override
-  Widget build(BuildContext context) {
-    return PopupMenuButton<double>(
-      tooltip: 'Tốc độ đọc',
-      initialValue: settings.speed,
-      onSelected: settings.setSpeed,
-      itemBuilder: (_) => [
-        for (final s in AppSettings.speedSteps)
-          PopupMenuItem<double>(
-            value: s,
-            child: Text('${_fmt(s)}×'),
-          ),
-      ],
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.speed, size: 20),
-            const SizedBox(width: 6),
-            Text('${_fmt(settings.speed)}×',
-                style: Theme.of(context).textTheme.labelLarge),
-          ],
-        ),
-      ),
-    );
-  }
-
-  static String _fmt(double v) =>
-      v == v.roundToDouble() ? v.toStringAsFixed(1) : v.toString();
 }

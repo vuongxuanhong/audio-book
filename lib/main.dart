@@ -41,12 +41,18 @@ class AudioBookApp extends StatelessWidget {
           create: (_) => LibraryController(library, store)..refresh(),
         ),
       ],
-      child: MaterialApp(
-        title: 'Audio Book',
-        debugShowCheckedModeBanner: false,
-        theme: _theme(Brightness.light),
-        darkTheme: _theme(Brightness.dark),
-        home: const LibraryScreen(),
+      // A Consumer here (rather than watching AppSettings directly in this
+      // build method) is required: this widget's own context sits above the
+      // MultiProvider, so it can't see the provider it just declared.
+      child: Consumer<AppSettings>(
+        builder: (context, settings, _) => MaterialApp(
+          title: 'Audio Book',
+          debugShowCheckedModeBanner: false,
+          theme: _theme(Brightness.light),
+          darkTheme: _theme(Brightness.dark),
+          themeMode: settings.themeMode,
+          home: const LibraryScreen(),
+        ),
       ),
     );
   }

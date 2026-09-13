@@ -66,14 +66,6 @@ class LibraryController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> rename(Book book, String title) async {
-    await _repo.rename(book, title);
-    _books = [
-      for (final b in _books) b.id == book.id ? b.copyWith(title: title) : b,
-    ];
-    notifyListeners();
-  }
-
   Future<void> resetProgress(Book book) async {
     await _settings.clearProgress(book.id);
     notifyListeners();

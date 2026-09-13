@@ -91,12 +91,6 @@ class LibraryRepository {
     if (dir.existsSync()) dir.deleteSync(recursive: true);
   }
 
-  Future<void> rename(Book book, String title) async {
-    final dir = await _booksDir();
-    final updated = book.copyWith(title: title);
-    File('${dir.path}/${book.id}/book.json').writeAsStringSync(updated.encode());
-  }
-
   /// Most Vietnamese novel dumps are UTF-8, but some are still Windows-1258 or
   /// Latin-1. Fall back rather than throwing on a bad byte.
   Future<String> _readAsText(File file) async {

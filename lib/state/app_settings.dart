@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart' show ThemeMode;
 
 import '../services/settings_store.dart';
 
@@ -12,7 +13,8 @@ class AppSettings extends ChangeNotifier {
         _paragraphPauseMs = _store.paragraphPauseMs,
         _clausePauseMs = _store.clausePauseMs,
         _beatPauseMs = _store.beatPauseMs,
-        _voiceId = _store.voiceId;
+        _voiceId = _store.voiceId,
+        _themeMode = _store.themeMode;
 
   final SettingsStore _store;
 
@@ -25,11 +27,13 @@ class AppSettings extends ChangeNotifier {
   double _clausePauseMs;
   double _beatPauseMs;
   String? _voiceId;
+  ThemeMode _themeMode;
 
   double get speed => _speed;
   double get fontSize => _fontSize;
   double get lineHeight => _lineHeight;
   bool get autoScroll => _autoScroll;
+  ThemeMode get themeMode => _themeMode;
 
   /// Silence between two sentences of the same paragraph. The voices trim most
   /// of the tail after a full stop, so without this they run together.
@@ -129,6 +133,13 @@ class AppSettings extends ChangeNotifier {
     if (id == _voiceId) return;
     _voiceId = id;
     if (id != null) _store.setVoiceId(id);
+    notifyListeners();
+  }
+
+  void setThemeMode(ThemeMode mode) {
+    if (mode == _themeMode) return;
+    _themeMode = mode;
+    _store.setThemeMode(mode);
     notifyListeners();
   }
 }

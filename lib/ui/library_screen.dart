@@ -9,6 +9,7 @@ import '../models/book.dart';
 import '../state/library_controller.dart';
 import 'reader_screen.dart';
 import 'voice_screen.dart';
+import 'widgets/app_settings_sheet.dart';
 
 class LibraryScreen extends StatelessWidget {
   const LibraryScreen({super.key});
@@ -27,6 +28,11 @@ class LibraryScreen extends StatelessWidget {
             onPressed: () => Navigator.of(context).push(
               MaterialPageRoute<void>(builder: (_) => const VoiceScreen()),
             ),
+          ),
+          IconButton(
+            tooltip: 'Cài đặt',
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: () => showAppSettingsSheet(context),
           ),
         ],
       ),
@@ -182,38 +188,6 @@ class _BookTile extends StatelessWidget {
   static String _kChars(int n) =>
       n >= 1000 ? '${(n / 1000).toStringAsFixed(1)}k' : '$n';
 
-  Future<void> _rename(BuildContext context) async {
-    final controller = context.read<LibraryController>();
-    final field = TextEditingController(text: book.title);
-    final title = await showDialog<String>(
-      context: context,
-      builder: (dialog) => AlertDialog(
-        title: const Text('Đổi tên truyện'),
-        content: TextField(
-          controller: field,
-          autofocus: true,
-          textInputAction: TextInputAction.done,
-          decoration: const InputDecoration(hintText: 'Tên truyện'),
-          onSubmitted: (v) => Navigator.pop(dialog, v),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialog),
-            child: const Text('Huỷ'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialog, field.text),
-            child: const Text('Lưu'),
-          ),
-        ],
-      ),
-    );
-    field.dispose();
-    final trimmed = title?.trim();
-    if (trimmed == null || trimmed.isEmpty || trimmed == book.title) return;
-    await controller.rename(book, trimmed);
-  }
-
   void _showActions(BuildContext context) {
     final controller = context.read<LibraryController>();
     showModalBottomSheet<void>(
@@ -222,14 +196,6 @@ class _BookTile extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            ListTile(
-              leading: const Icon(Icons.edit_outlined),
-              title: const Text('Đổi tên truyện'),
-              onTap: () {
-                Navigator.pop(sheet);
-                _rename(context);
-              },
-            ),
             ListTile(
               leading: const Icon(Icons.restart_alt),
               title: const Text('Đọc lại từ đầu'),
