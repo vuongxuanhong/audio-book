@@ -8,6 +8,8 @@ class ChapterRef {
     required this.title,
     required this.fileName,
     required this.charCount,
+    this.remoteChapterId,
+    this.isFree = true,
   });
 
   final int index;
@@ -15,11 +17,22 @@ class ChapterRef {
   final String fileName;
   final int charCount;
 
+  /// Server-side chapter id for a remote book's chapter — null for chapters
+  /// imported from a local .txt/.epub. The content route addresses chapters
+  /// by this id, not by [index].
+  final String? remoteChapterId;
+
+  /// Whether this chapter can be read without an unlocked entitlement.
+  /// Always true for locally-imported chapters.
+  final bool isFree;
+
   factory ChapterRef.fromJson(Map<String, dynamic> json) => ChapterRef(
         index: json['index'] as int,
         title: json['title'] as String,
         fileName: json['fileName'] as String,
         charCount: json['charCount'] as int? ?? 0,
+        remoteChapterId: json['remoteChapterId'] as String?,
+        isFree: json['isFree'] as bool? ?? true,
       );
 
   Map<String, dynamic> toJson() => {
@@ -27,6 +40,8 @@ class ChapterRef {
         'title': title,
         'fileName': fileName,
         'charCount': charCount,
+        if (remoteChapterId != null) 'remoteChapterId': remoteChapterId,
+        'isFree': isFree,
       };
 }
 
@@ -37,6 +52,7 @@ class Book {
     required this.author,
     required this.importedAt,
     required this.chapters,
+    this.remoteId,
   });
 
   final String id;
@@ -44,6 +60,14 @@ class Book {
   final String author;
   final DateTime importedAt;
   final List<ChapterRef> chapters;
+
+  /// Server-side book id when this book's chapters are fetched from the
+  /// remote catalog rather than a local .txt/.epub import. Null for a
+  /// locally-imported book — [id] (the on-disk folder name) is used either
+  /// way and is independent of this.
+  final String? remoteId;
+
+  bool get isRemote => remoteId != null;
 
   int get chapterCount => chapters.length;
 
@@ -56,6 +80,7 @@ class Book {
         author: author ?? this.author,
         importedAt: importedAt,
         chapters: chapters,
+        remoteId: remoteId,
       );
 
   factory Book.fromJson(Map<String, dynamic> json) => Book(
@@ -66,6 +91,7 @@ class Book {
         chapters: (json['chapters'] as List<dynamic>)
             .map((e) => ChapterRef.fromJson(e as Map<String, dynamic>))
             .toList(growable: false),
+        remoteId: json['remoteId'] as String?,
       );
 
   Map<String, dynamic> toJson() => {
@@ -74,6 +100,7 @@ class Book {
         'author': author,
         'importedAt': importedAt.toIso8601String(),
         'chapters': chapters.map((c) => c.toJson()).toList(),
+        if (remoteId != null) 'remoteId': remoteId,
       };
 
   String encode() => const JsonEncoder.withIndent('  ').convert(toJson());

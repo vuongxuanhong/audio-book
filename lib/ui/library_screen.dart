@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 
 import '../models/book.dart';
 import '../state/library_controller.dart';
+import 'catalog_screen.dart';
 import 'reader_screen.dart';
 import 'voice_screen.dart';
 import 'widgets/app_settings_sheet.dart';
@@ -22,6 +23,13 @@ class LibraryScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Tủ sách'),
         actions: [
+          IconButton(
+            tooltip: 'Kho truyện',
+            icon: const Icon(Icons.cloud_outlined),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const CatalogScreen()),
+            ),
+          ),
           IconButton(
             tooltip: 'Giọng đọc',
             icon: const Icon(Icons.record_voice_over_outlined),

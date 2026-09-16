@@ -44,6 +44,7 @@ Future<int?> showChapterPicker(
                 itemCount: chapters.length,
                 itemBuilder: (context, i) {
                   final selected = i == current;
+                  final locked = !chapters[i].isFree;
                   return ListTile(
                     dense: true,
                     selected: selected,
@@ -53,7 +54,11 @@ Future<int?> showChapterPicker(
                         maxLines: 2, overflow: TextOverflow.ellipsis),
                     trailing: selected
                         ? const Icon(Icons.play_arrow, size: 18)
-                        : null,
+                        : locked
+                            ? Icon(Icons.lock_outline,
+                                size: 16,
+                                color: Theme.of(context).colorScheme.outline)
+                            : null,
                     onTap: () => Navigator.pop(sheet, i),
                   );
                 },

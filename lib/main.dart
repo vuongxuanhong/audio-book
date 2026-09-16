@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'services/api_client.dart';
+import 'services/device_auth.dart';
 import 'services/library_repository.dart';
+import 'services/remote_book_service.dart';
 import 'services/settings_store.dart';
 import 'services/voice_repository.dart';
 import 'state/app_settings.dart';
@@ -11,10 +14,19 @@ import 'ui/library_screen.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final store = await SettingsStore.open();
-  final library = LibraryRepository();
+  final deviceAuth = DeviceAuth();
+  final apiClient = ApiClient(deviceAuth);
+  final remoteBooks = RemoteBookService(apiClient);
+  final library = LibraryRepository(remote: remoteBooks);
   final voices = VoiceRepository();
 
-  runApp(AudioBookApp(store: store, library: library, voices: voices));
+  runApp(AudioBookApp(
+    store: store,
+    library: library,
+    voices: voices,
+    deviceAuth: deviceAuth,
+    remoteBooks: remoteBooks,
+  ));
 }
 
 class AudioBookApp extends StatelessWidget {
@@ -23,11 +35,15 @@ class AudioBookApp extends StatelessWidget {
     required this.store,
     required this.library,
     required this.voices,
+    required this.deviceAuth,
+    required this.remoteBooks,
   });
 
   final SettingsStore store;
   final LibraryRepository library;
   final VoiceRepository voices;
+  final DeviceAuth deviceAuth;
+  final RemoteBookService remoteBooks;
 
   @override
   Widget build(BuildContext context) {
@@ -36,6 +52,8 @@ class AudioBookApp extends StatelessWidget {
         Provider.value(value: store),
         Provider.value(value: library),
         Provider.value(value: voices),
+        Provider.value(value: deviceAuth),
+        Provider.value(value: remoteBooks),
         ChangeNotifierProvider(create: (_) => AppSettings(store)),
         ChangeNotifierProvider(
           create: (_) => LibraryController(library, store)..refresh(),

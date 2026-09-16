@@ -46,6 +46,11 @@ dependencies:
   xml: ^6.6.1
   html: ^0.15.7
   screen_protector: ^1.5.3
+  dio: ^5.7.0
+  flutter_secure_storage: ^11.1.1
+  cryptography: ^2.7.0
+  google_sign_in: ^6.2.2
+  sign_in_with_apple: ^6.1.4
 
 dev_dependencies:
   flutter_test:

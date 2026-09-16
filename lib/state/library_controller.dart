@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../models/book.dart';
 import '../models/reading_progress.dart';
 import '../services/library_repository.dart';
+import '../services/remote_book_service.dart';
 import '../services/settings_store.dart';
 
 class LibraryController extends ChangeNotifier {
@@ -54,6 +55,13 @@ class LibraryController extends ChangeNotifier {
 
   Future<Book> importText(String text, String title) async {
     final book = await _repo.importText(rawText: text, fallbackTitle: title);
+    _books = [book, ..._books];
+    notifyListeners();
+    return book;
+  }
+
+  Future<Book> importFromRemote(RemoteBookMeta meta) async {
+    final book = await _repo.importFromRemote(meta);
     _books = [book, ..._books];
     notifyListeners();
     return book;

@@ -7,6 +7,7 @@ import 'package:real_page_flip/real_page_flip.dart';
 
 import '../models/book.dart';
 import '../models/sentence.dart';
+import '../services/device_auth.dart';
 import '../services/library_repository.dart';
 import '../services/paginator.dart';
 import '../services/screen_security.dart';
@@ -211,7 +212,11 @@ class _ReaderViewState extends State<_ReaderView> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 if (controller.voiceMissing) _VoiceBanner(controller: controller),
-                if (controller.error != null)
+                // A locked chapter already gets its own full-screen prompt
+                // (with the right actions — sign in, or an explanation) below;
+                // this generic banner's "Thử lại" is for the voice-loading
+                // error path (`reloadVoice`), which doesn't apply here.
+                if (controller.error != null && controller.lockReason == null)
                   MaterialBanner(
                     content: Text(controller.error!),
                     actions: [
@@ -248,7 +253,13 @@ class _ReaderViewState extends State<_ReaderView> {
                 ReaderStatus.error => Center(
                     child: Padding(
                       padding: const EdgeInsets.all(24),
-                      child: Text(controller.error ?? 'Không mở được chương'),
+                      child: switch (controller.lockReason) {
+                        ChapterLockReason.needsLogin =>
+                          _LoginPrompt(controller: controller),
+                        ChapterLockReason.needsEntitlement =>
+                          const _EntitlementPrompt(),
+                        null => Text(controller.error ?? 'Không mở được chương'),
+                      },
                     ),
                   ),
                 ReaderStatus.ready => Padding(
@@ -670,6 +681,96 @@ class _VoiceBanner extends StatelessWidget {
             await controller.reloadVoice();
           },
           child: const Text('Tải giọng đọc'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Shown in place of a locked chapter's content when the device hasn't
+/// linked to a user yet — sign-in unlocks whichever entitlements that
+/// account has, then the chapter is reloaded automatically.
+class _LoginPrompt extends StatefulWidget {
+  const _LoginPrompt({required this.controller});
+
+  final ReaderController controller;
+
+  @override
+  State<_LoginPrompt> createState() => _LoginPromptState();
+}
+
+class _LoginPromptState extends State<_LoginPrompt> {
+  bool _busy = false;
+  String? _error;
+
+  Future<void> _signIn(Future<void> Function() signIn) async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await signIn();
+      await widget.controller.retryCurrentChapter();
+    } on Object catch (e) {
+      if (mounted) setState(() => _error = 'Đăng nhập thất bại: $e');
+      messenger.showSnackBar(const SnackBar(content: Text('Đăng nhập thất bại')));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = context.read<DeviceAuth>();
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(Icons.lock_outline, size: 48),
+        const SizedBox(height: 12),
+        const Text('Chương này cần đăng nhập để đọc.'),
+        const SizedBox(height: 20),
+        if (_busy)
+          const CircularProgressIndicator()
+        else ...[
+          FilledButton.icon(
+            onPressed: () => _signIn(auth.signInWithGoogle),
+            icon: const Icon(Icons.login),
+            label: const Text('Đăng nhập với Google'),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: () => _signIn(auth.signInWithApple),
+            icon: const Icon(Icons.apple),
+            label: const Text('Đăng nhập với Apple'),
+          ),
+        ],
+        if (_error != null) ...[
+          const SizedBox(height: 12),
+          Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+        ],
+      ],
+    );
+  }
+}
+
+/// Shown when the signed-in user has no entitlement covering this book. The
+/// MVP has no in-app purchase flow yet (see the backend plan) — admin grants
+/// entitlements by hand — so this just explains the state.
+class _EntitlementPrompt extends StatelessWidget {
+  const _EntitlementPrompt();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.lock_clock_outlined, size: 48),
+        SizedBox(height: 12),
+        Text(
+          'Truyện này chưa được mở khoá cho tài khoản của bạn.\n'
+          'Liên hệ để được mở khoá.',
+          textAlign: TextAlign.center,
         ),
       ],
     );

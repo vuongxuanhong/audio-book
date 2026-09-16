@@ -10,6 +10,8 @@ import '../models/reading_progress.dart';
 import '../models/sentence.dart';
 import '../services/library_repository.dart';
 import '../services/paginator.dart';
+import '../services/remote_book_service.dart'
+    show EntitlementRequiredException, LoginRequiredException;
 import '../services/settings_store.dart';
 import '../services/text_parser.dart' as parser;
 import '../services/tts_engine.dart';
@@ -17,6 +19,10 @@ import '../services/voice_repository.dart';
 import 'app_settings.dart';
 
 enum ReaderStatus { loading, ready, error }
+
+/// Why a locked remote chapter's content couldn't be loaded — lets the UI
+/// show "sign in" vs. "not unlocked" instead of a generic error message.
+enum ChapterLockReason { needsLogin, needsEntitlement }
 
 /// Drives one open book: which chapter is on screen, which sentence is being
 /// spoken, and the synthesize-ahead queue that keeps playback gapless.
@@ -47,6 +53,7 @@ class ReaderController extends ChangeNotifier {
 
   ReaderStatus _status = ReaderStatus.loading;
   String? _error;
+  ChapterLockReason? _lockReason;
 
   int _chapterIndex = 0;
   String _chapterText = '';
@@ -87,6 +94,7 @@ class ReaderController extends ChangeNotifier {
   Book get book => _book;
   ReaderStatus get status => _status;
   String? get error => _error;
+  ChapterLockReason? get lockReason => _lockReason;
   int get chapterIndex => _chapterIndex;
   ChapterRef get chapter => _book.chapters[_chapterIndex];
   String get chapterText => _chapterText;
@@ -194,7 +202,13 @@ class ReaderController extends ChangeNotifier {
   }
 
   Future<void> _init() async {
-    final saved = _store.progressFor(_book.id);
+    var saved = _store.progressFor(_book.id);
+    if (_book.isRemote) {
+      final remote = await _library.fetchRemoteProgress(_book);
+      if (remote != null && (saved == null || remote.updatedAt.isAfter(saved.updatedAt))) {
+        saved = remote;
+      }
+    }
     final startChapter =
         (saved?.chapterIndex ?? 0).clamp(0, _book.chapterCount - 1);
     await _loadChapter(startChapter, sentenceIndex: saved?.sentenceIndex ?? 0);
@@ -219,13 +233,28 @@ class ReaderController extends ChangeNotifier {
       _pendingBeat = false;
       _status = ReaderStatus.ready;
       _error = null;
+      _lockReason = null;
+    } on LoginRequiredException {
+      _status = ReaderStatus.error;
+      _error = 'Chương này cần đăng nhập.';
+      _lockReason = ChapterLockReason.needsLogin;
+    } on EntitlementRequiredException {
+      _status = ReaderStatus.error;
+      _error = 'Chương này chưa được mở khoá.';
+      _lockReason = ChapterLockReason.needsEntitlement;
     } on Object catch (e) {
       _status = ReaderStatus.error;
       _error = e.toString();
+      _lockReason = null;
     }
     _safeNotify();
     highlightTick.value++;
   }
+
+  /// Re-attempts loading the chapter that just failed to unlock — call after
+  /// a successful sign-in so the reader doesn't have to be closed and reopened.
+  Future<void> retryCurrentChapter() =>
+      _loadChapter(_chapterIndex, sentenceIndex: _cursor);
 
   Future<void> _prepareVoice() async {
     try {
@@ -507,6 +536,9 @@ class ReaderController extends ChangeNotifier {
       sentenceIndex: _cursor,
       updatedAt: DateTime.now(),
     )));
+    if (_book.isRemote) {
+      unawaited(_library.pushRemoteProgress(_book, _chapterIndex, _cursor));
+    }
   }
 
   /// Called by the reader when the user swipes to a page by hand. While
