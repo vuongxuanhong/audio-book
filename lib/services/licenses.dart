@@ -17,12 +17,12 @@ class ThirdPartyNotice {
 }
 
 /// Datasets and data files behind the voices in `kVoiceCatalog`, taken from
-/// each voice's MODEL_CARD (rhasspy/piper-voices) or LICENSE
-/// (MycroftAI/mimic3-voices). Re-check these when adding a voice.
+/// each voice's MODEL_CARD (rhasspy/piper-voices). Re-check these when adding
+/// a voice.
 const kThirdPartyNotices = <ThirdPartyNotice>[
   ThirdPartyNotice(
     name: 'VAIS-1000 Vietnamese Speech Synthesis Corpus',
-    usedFor: 'Giọng VAIS 1000 (piper, mimic3)',
+    usedFor: 'Giọng VAIS 1000',
     license: 'CC BY 4.0',
     url:
         'https://ieee-dataport.org/documents/vais-1000-vietnamese-speech-synthesis-corpus',

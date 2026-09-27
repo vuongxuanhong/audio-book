@@ -216,13 +216,13 @@ tải một lần rồi giải nén. Danh mục ở `lib/models/voice.dart`.
 | --- | --- | --- | --- |
 | VAIS 1000 (medium, int8) | 1 nữ | 21 MB | Mặc định. Nhẹ nhất, nhưng chậm — xem dưới |
 | VAIS 1000 (medium, đầy đủ) | 1 nữ | 64 MB | Cùng giọng, nhanh gấp 3, dải cao tốt hơn |
-| VAIS 1000 (mimic3) | 1 nữ | 64 MB | RTF 0.06, bỏ vài âm vị hiếm |
 
 sherpa-onnx còn phát hành hai giọng tiếng Việt nữa nhưng không đưa vào vì
 giấy phép dữ liệu: **VIVOS** (65 người đọc, gói duy nhất có giọng nam) dùng
 CC BY-NC-SA 4.0 — cấm thương mại; **25 Hours Single** có giấy phép dataset
 "Unknown" theo model card. Không có MMS hay Kokoro tiếng Việt. Các bản `fp16`
 chỉ là mức lượng tử hoá khác của cùng giọng piper nên cũng không đưa vào.
+Bản VAIS 1000 chạy engine mimic3 cũng bỏ, vì trùng giọng với hai bản piper.
 
 ### int8 và bản đầy đủ khác nhau ra sao
 

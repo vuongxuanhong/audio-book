@@ -76,14 +76,4 @@ const kVoiceCatalog = <VoiceCatalogEntry>[
         'https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-vi_VN-vais1000-medium.tar.bz2',
     downloadBytes: 67100000,
   ),
-  VoiceCatalogEntry(
-    id: 'vits-mimic3-vi_VN-vais1000_low',
-    slot: '5',
-    name: 'VAIS 1000 (mimic3)',
-    description: 'Cùng kho tiếng với VAIS 1000 nhưng engine mimic3. Nhanh '
-        'ngang bản đầy đủ (RTF 0.06), đổi lại bỏ qua vài âm vị hiếm.',
-    url:
-        'https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-mimic3-vi_VN-vais1000_low.tar.bz2',
-    downloadBytes: 66800000,
-  ),
 ];
