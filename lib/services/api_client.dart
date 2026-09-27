@@ -3,9 +3,13 @@ import 'package:flutter/foundation.dart' show kDebugMode, debugPrint;
 
 import 'device_auth.dart';
 
-/// Placeholder until a real host is chosen (see the backend repo's plan doc);
-/// point this at wherever `audiobook-backend` ends up running.
-const String remoteApiBaseUrl = 'http://localhost:8000';
+/// Where `audiobook-backend` runs. Defaults to the Railway deployment;
+/// override for local dev with
+/// `--dart-define=API_BASE_URL=http://localhost:8000`.
+const String remoteApiBaseUrl = String.fromEnvironment(
+  'API_BASE_URL',
+  defaultValue: 'https://audiobook-backend-production-6632.up.railway.app',
+);
 
 /// A [Dio] instance wired to attach the device/user bearer token to every
 /// request and to retry once, after a token refresh, on a 401.

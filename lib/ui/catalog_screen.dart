@@ -130,7 +130,7 @@ class _CatalogTile extends StatelessWidget {
           child: Icon(Icons.cloud_download_outlined, color: theme.colorScheme.onPrimaryContainer),
         ),
         title: Text(item.title, maxLines: 2, overflow: TextOverflow.ellipsis),
-        subtitle: Text('${item.author} · ${item.chapterCount} chương'),
+        subtitle: Text('${item.chapterCount} chương'),
       ),
     );
   }

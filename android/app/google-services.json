@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "380672192871",
+    "project_id": "audio-book-2f9d4",
+    "storage_bucket": "audio-book-2f9d4.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:380672192871:android:f667e87e5297e58a503fc2",
+        "android_client_info": {
+          "package_name": "com.hongngoc.audionovel"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "380672192871-0nunhsh7f425r6i45lco3odrpv0ujjtp.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.hongngoc.audionovel",
+            "certificate_hash": "1b8723f4f7a3e0a44f72e3e3f1fa5ad426729254"
+          }
+        },
+        {
+          "client_id": "380672192871-12dke7he1n8sp7o8n1phhmlb8f6onrlr.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyASUR3xybI39B03xwhE-f01-P3sH1tqC20"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "380672192871-12dke7he1n8sp7o8n1phhmlb8f6onrlr.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
