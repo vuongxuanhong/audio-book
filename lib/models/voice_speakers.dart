@@ -5,18 +5,9 @@
 /// stand-in for "what does this voice sound like" — below ~165 Hz reads as a
 /// male voice, above it as female — and it lets the picker say something
 /// truthful about 65 speakers without anyone having listened to all of them.
-const kSpeakerPitchHz = <String, List<int>>{
-  // VIVOS x-low: 65 speakers, 31 nam / 34 nữ, 105–314 Hz.
-  'vits-piper-vi_VN-vivos-x_low-int8': [
-    271, 271, 138, 258, 254, 158, 170, 157, 131, 154, //
-    314, 250, 254, 246, 242, 254, 276, 225, 222, 296, //
-    246, 258, 267, 242, 250, 140, 235, 239, 140, 120, //
-    148, 232, 225, 134, 157, 180, 150, 163, 132, 145, //
-    258, 134, 180, 133, 137, 124, 138, 138, 142, 138, //
-    130, 131, 157, 152, 130, 125, 124, 105, 232, 211, //
-    246, 242, 225, 242, 222, //
-  ],
-};
+// No multi-speaker pack in the catalogue has been measured yet. VIVOS
+// (65 speakers) was dropped for its non-commercial license.
+const kSpeakerPitchHz = <String, List<int>>{};
 
 /// Above this, a measured F0 reads as a female voice.
 const kFemalePitchFloorHz = 165;

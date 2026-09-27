@@ -39,7 +39,7 @@ class VoiceRepository {
     if (_root != null) return _root!;
     // `Library` is two path segments shorter than `Library/Application
     // Support`, which matters for the espeak path budget above.
-    final base = (Platform.isIOS || Platform.isMacOS)
+    final base = Platform.isIOS
         ? await getLibraryDirectory()
         : await getApplicationSupportDirectory();
     final dir = Directory('${base.path}/v');

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'services/api_client.dart';
 import 'services/device_auth.dart';
 import 'services/library_repository.dart';
+import 'services/licenses.dart';
 import 'services/remote_book_service.dart';
 import 'services/settings_store.dart';
 import 'services/voice_repository.dart';
@@ -13,6 +14,7 @@ import 'ui/library_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  registerThirdPartyLicenses();
   final store = await SettingsStore.open();
   final deviceAuth = DeviceAuth();
   final apiClient = ApiClient(deviceAuth);
@@ -64,7 +66,7 @@ class AudioBookApp extends StatelessWidget {
       // MultiProvider, so it can't see the provider it just declared.
       child: Consumer<AppSettings>(
         builder: (context, settings, _) => MaterialApp(
-          title: 'Audio Book',
+          title: 'Tàng Kinh Các',
           debugShowCheckedModeBanner: false,
           theme: _theme(Brightness.light),
           darkTheme: _theme(Brightness.dark),

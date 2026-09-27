@@ -23,7 +23,7 @@ khôi phục vị trí, chỉnh tốc độ.
 
 ```bash
 flutter pub get
-flutter run          # iOS / Android / macOS
+flutter run          # iOS / Android
 ```
 
 Lần đầu mở app: bấm **Dùng truyện mẫu** để có nội dung ngay, rồi vào biểu
@@ -216,13 +216,13 @@ tải một lần rồi giải nén. Danh mục ở `lib/models/voice.dart`.
 | --- | --- | --- | --- |
 | VAIS 1000 (medium, int8) | 1 nữ | 21 MB | Mặc định. Nhẹ nhất, nhưng chậm — xem dưới |
 | VAIS 1000 (medium, đầy đủ) | 1 nữ | 64 MB | Cùng giọng, nhanh gấp 3, dải cao tốt hơn |
-| 25 Hours Single (low) | 1 nữ | 20 MB | Giọng nữ khác |
 | VAIS 1000 (mimic3) | 1 nữ | 64 MB | RTF 0.06, bỏ vài âm vị hiếm |
-| **VIVOS (x-low)** | **65 người: 31 nam, 34 nữ** | **14 MB** | Gói duy nhất có giọng nam |
 
-Đó là toàn bộ giọng tiếng Việt sherpa-onnx phát hành — không có MMS hay Kokoro
-tiếng Việt. Các bản `fp16` chỉ là mức lượng tử hoá khác của cùng ba giọng piper
-nên không đưa vào danh sách.
+sherpa-onnx còn phát hành hai giọng tiếng Việt nữa nhưng không đưa vào vì
+giấy phép dữ liệu: **VIVOS** (65 người đọc, gói duy nhất có giọng nam) dùng
+CC BY-NC-SA 4.0 — cấm thương mại; **25 Hours Single** có giấy phép dataset
+"Unknown" theo model card. Không có MMS hay Kokoro tiếng Việt. Các bản `fp16`
+chỉ là mức lượng tử hoá khác của cùng giọng piper nên cũng không đưa vào.
 
 ### int8 và bản đầy đủ khác nhau ra sao
 
@@ -253,23 +253,17 @@ nguyên người đọc, chỉ làm mờ phần cao.
 Vì vậy bản đầy đủ **vừa nhanh hơn vừa sạch hơn**; cái giá duy nhất là 64 MB
 thay vì 21 MB. Mặc định vẫn để int8 cho lần tải đầu nhẹ.
 
-### 65 giọng của VIVOS
+### Gói nhiều người đọc
 
-`num_speakers` đọc từ `<model>.onnx.json` nên không phải nạp model chỉ để đếm.
-Speaker id chỉ có nghĩa trong phạm vi một gói, nên lưu theo khoá
-`tts.speaker.<voiceId>`.
+Danh mục hiện không có gói nhiều speaker, nhưng code vẫn hỗ trợ:
+`num_speakers` đọc từ `<model>.onnx.json`, speaker id lưu theo khoá
+`tts.speaker.<voiceId>`, và bộ chọn giọng hiện ra khi gói có hơn một người đọc.
 
-Sáu mươi lăm giọng đánh số trần trụi thì không phải là lựa chọn. Vì vậy
 `tool/speaker_scan.dart` sinh thử một câu cho từng speaker rồi đo F0 trung vị
-bằng autocorrelation, kết quả nằm ở `lib/models/voice_speakers.dart` — bộ chọn
-hiển thị "Giọng 30 · nam · 120 Hz" và tách sẵn hai nhóm nam/nữ. Mỗi dòng chạm
-vào là nghe thử ngay.
-
-Con số Hz là trung vị trên một câu mẫu cố định; đổi câu thì giá trị tuyệt đối
-xê dịch (đo lại "Giọng 30" bằng câu của bộ chọn ra 144 Hz thay vì 120 Hz).
-Phần đáng tin là ranh giới nam/nữ, và thứ tự cao thấp giữa các giọng.
-
-Chạy lại phép đo cho một gói nhiều speaker khác:
+bằng autocorrelation; ghi kết quả vào `kSpeakerPitchHz` trong
+`lib/models/voice_speakers.dart` thì bộ chọn hiển thị "Giọng 30 · nam · 120 Hz"
+và tách hai nhóm nam/nữ. Con số Hz chỉ đáng tin ở ranh giới nam/nữ và thứ tự
+cao thấp, không phải giá trị tuyệt đối.
 
 ```bash
 dart run tool/speaker_scan.dart <thư-mục-gói-đã-giải-nén>

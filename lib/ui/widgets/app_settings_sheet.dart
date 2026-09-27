@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../state/app_settings.dart';
+import '../about_screen.dart';
 import 'theme_mode_selector.dart';
 
 /// The app's own settings, reachable outside of any open book — today just
-/// the theme. Reading-specific controls (speed, font, pacing) live in
+/// the theme and a link to the About screen. Reading-specific controls (speed, font, pacing) live in
 /// `reader_settings_sheet.dart` instead, since they only make sense with a
 /// book open.
 Future<void> showAppSettingsSheet(BuildContext context) {
@@ -35,6 +36,20 @@ class _AppSettings extends StatelessWidget {
             ThemeModeSelector(
               value: settings.themeMode,
               onChanged: settings.setThemeMode,
+            ),
+            const SizedBox(height: 16),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.info_outline),
+              title: const Text('Giới thiệu & giấy phép'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.of(context)
+                  ..pop()
+                  ..push(MaterialPageRoute<void>(
+                    builder: (_) => const AboutScreen(),
+                  ));
+              },
             ),
           ],
         ),

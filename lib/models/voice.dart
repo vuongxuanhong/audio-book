@@ -45,7 +45,7 @@ class InstalledVoice {
   final String tokensPath;
   final String dataDir;
 
-  /// Read from the model's `.onnx.json`. VIVOS ships 65 in one 14 MB pack.
+  /// Read from the model's `.onnx.json`.
   final int numSpeakers;
 
   bool get isMultiSpeaker => numSpeakers > 1;
@@ -77,15 +77,6 @@ const kVoiceCatalog = <VoiceCatalogEntry>[
     downloadBytes: 67100000,
   ),
   VoiceCatalogEntry(
-    id: 'vits-piper-vi_VN-25hours_single-low-int8',
-    slot: '3',
-    name: '25 Hours Single (low)',
-    description: 'Một giọng nữ khác, 16 kHz. Đổi không khí khi nghe dài.',
-    url:
-        'https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-vi_VN-25hours_single-low-int8.tar.bz2',
-    downloadBytes: 21200000,
-  ),
-  VoiceCatalogEntry(
     id: 'vits-mimic3-vi_VN-vais1000_low',
     slot: '5',
     name: 'VAIS 1000 (mimic3)',
@@ -94,15 +85,5 @@ const kVoiceCatalog = <VoiceCatalogEntry>[
     url:
         'https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-mimic3-vi_VN-vais1000_low.tar.bz2',
     downloadBytes: 66800000,
-  ),
-  VoiceCatalogEntry(
-    id: 'vits-piper-vi_VN-vivos-x_low-int8',
-    slot: '4',
-    name: 'VIVOS (x-low) · 65 giọng',
-    description: '65 người đọc trong một gói 14 MB — 31 nam, 34 nữ, 16 kHz. '
-        'Gói duy nhất có giọng nam. Chất lượng thấp hơn; chọn giọng sau khi tải.',
-    url:
-        'https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-vi_VN-vivos-x_low-int8.tar.bz2',
-    downloadBytes: 14700000,
   ),
 ];

@@ -3,25 +3,12 @@ import 'package:audio_book/models/voice_speakers.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  const vivos = 'vits-piper-vi_VN-vivos-x_low-int8';
+  const pack = 'some-multi-speaker-pack';
 
   group('speakerChoices', () {
-    test('covers every speaker in the scanned pack', () {
-      final choices = speakerChoices(vivos, 65);
-      expect(choices.length, 65);
-      expect(choices.every((c) => c.pitchHz > 0), isTrue,
-          reason: 'every VIVOS speaker was measured by tool/speaker_scan.dart');
-    });
-
-    test('splits into the mix the scan found: 31 nam, 34 nữ', () {
-      final choices = speakerChoices(vivos, 65);
-      expect(choices.where((c) => c.isMale).length, 31);
-      expect(choices.where((c) => !c.isMale).length, 34);
-    });
-
     test('numbers speakers from one for display', () {
-      expect(speakerChoices(vivos, 3).first.name, 'Giọng 1');
-      expect(speakerChoices(vivos, 3).last.name, 'Giọng 3');
+      expect(speakerChoices(pack, 3).first.name, 'Giọng 1');
+      expect(speakerChoices(pack, 3).last.name, 'Giọng 3');
     });
 
     test('degrades to a plain list for an unmeasured pack', () {
@@ -30,12 +17,6 @@ void main() {
       expect(choices.every((c) => c.pitchHz == 0), isTrue);
       expect(choices.every((c) => c.detail.isEmpty), isTrue);
       expect(choices.every((c) => !c.isMale), isTrue);
-    });
-
-    test('does not run past a shorter measurement table', () {
-      final choices = speakerChoices(vivos, 80);
-      expect(choices.length, 80);
-      expect(choices[70].pitchHz, 0);
     });
   });
 
