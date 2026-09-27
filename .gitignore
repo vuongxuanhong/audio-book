@@ -122,3 +122,6 @@ app.*.symbols
 *.iml
 *.ipr
 *.iws
+
+# macOS
+.DS_Store
