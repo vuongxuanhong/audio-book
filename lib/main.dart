@@ -1,4 +1,6 @@
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter/material.dart';
+import 'package:just_audio_background/just_audio_background.dart';
 import 'package:provider/provider.dart';
 
 import 'services/api_client.dart';
@@ -15,6 +17,19 @@ import 'ui/library_screen.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   registerThirdPartyLicenses();
+  // Listening keeps going with the screen off or the app in the background.
+  // The notification and lock-screen controls only appear once the reader
+  // starts speaking, and go away when it stops.
+  await JustAudioBackground.init(
+    androidNotificationChannelId: 'com.hongngoc.audionovel.channel.audio',
+    androidNotificationChannelName: 'Nghe truyện',
+    androidNotificationIcon: 'drawable/ic_stat_listen',
+    androidNotificationOngoing: true,
+  );
+  // Spoken word, not music: iOS pauses (rather than ducks) it for other
+  // speech such as navigation prompts, and calls pause it.
+  await (await AudioSession.instance)
+      .configure(const AudioSessionConfiguration.speech());
   final store = await SettingsStore.open();
   final deviceAuth = DeviceAuth();
   final apiClient = ApiClient(deviceAuth);

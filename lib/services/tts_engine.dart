@@ -126,6 +126,44 @@ class TtsEngine {
     return completer.future;
   }
 
+  /// A copy of the WAV at [clipPath] with [silenceMs] of silence in front.
+  ///
+  /// The pause before a line has to be part of the audio itself: in the
+  /// background the player must never sit idle between lines, or iOS
+  /// suspends the app and the next line never starts. The copy sits next to
+  /// the clip so it is cached and cleared with it.
+  Future<String> withLeadingSilence(String clipPath, int silenceMs) async {
+    if (silenceMs <= 0) return clipPath;
+    final path = clipPath.replaceFirst(RegExp(r'\.wav$'), '_s$silenceMs.wav');
+    final out = File(path);
+    if (out.existsSync() && out.lengthSync() > 44) return path;
+
+    final raw = await File(clipPath).readAsBytes();
+    if (raw.length < 44) return clipPath;
+    final header = ByteData.sublistView(raw, 0, 44);
+    final channels = header.getUint16(22, Endian.little);
+    final sampleRate = header.getUint32(24, Endian.little);
+    final bits = header.getUint16(34, Endian.little);
+    final blockAlign = channels * bits ~/ 8;
+    if (blockAlign == 0 || sampleRate == 0) return clipPath;
+
+    final silenceBytes = (sampleRate * silenceMs ~/ 1000) * blockAlign;
+    final dataBytes = raw.length - 44 + silenceBytes;
+    final bytes = Uint8List(44 + dataBytes)
+      ..setRange(0, 44, raw)
+      ..setRange(44 + silenceBytes, 44 + dataBytes, raw, 44);
+    ByteData.sublistView(bytes)
+      ..setUint32(4, 36 + dataBytes, Endian.little)
+      ..setUint32(40, dataBytes, Endian.little);
+
+    // Write under a temporary name so a half-written file is never mistaken
+    // for a finished one by the existence check above.
+    final tmp = File('$path.part');
+    await tmp.writeAsBytes(bytes, flush: true);
+    await tmp.rename(path);
+    return path;
+  }
+
   Future<void> dispose() async {
     _tx?.send({'cmd': 'shutdown'});
     _rx?.close();

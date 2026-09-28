@@ -4,11 +4,13 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:just_audio_background/just_audio_background.dart';
 
 import '../models/book.dart';
 import '../models/reading_progress.dart';
 import '../models/sentence.dart';
 import '../services/library_repository.dart';
+import '../services/now_playing_art.dart';
 import '../services/paginator.dart';
 import '../services/remote_book_service.dart'
     show EntitlementRequiredException, LoginRequiredException;
@@ -24,8 +26,36 @@ enum ReaderStatus { loading, ready, error }
 /// show "sign in" vs. "not unlocked" instead of a generic error message.
 enum ChapterLockReason { needsLogin, needsEntitlement }
 
+/// A chapter's text, split up — what's on screen, or what the playback queue
+/// has already reached past the end of the chapter on screen.
+class _ChapterData {
+  const _ChapterData(this.index, this.text, this.paragraphs, this.sentences);
+
+  final int index;
+  final String text;
+  final List<Paragraph> paragraphs;
+  final List<Sentence> sentences;
+}
+
+/// One line in the player's playlist, by position in the book.
+class _QueuedLine {
+  const _QueuedLine(this.chapter, this.sentence);
+
+  final _ChapterData chapter;
+  final int sentence;
+}
+
 /// Drives one open book: which chapter is on screen, which sentence is being
 /// spoken, and the synthesize-ahead queue that keeps playback gapless.
+///
+/// Playback is a playlist rather than one clip at a time: lines are
+/// synthesized a few ahead and appended, each with its pause baked in, so the
+/// player never goes idle between lines. That is what lets listening carry on
+/// with the screen off — an idle player in the background gets the app
+/// suspended on iOS. The lock-screen controls and the Android foreground
+/// service come from just_audio_background and only exist while there is
+/// something in the playlist, so reading without listening runs nothing in
+/// the background.
 class ReaderController extends ChangeNotifier {
   ReaderController({
     required Book book,
@@ -39,8 +69,17 @@ class ReaderController extends ChangeNotifier {
         _store = store,
         _settings = settings {
     _settings.addListener(_onSettingsChanged);
+    _subs = [
+      _player.currentIndexStream.listen(_onPlayerIndex),
+      _player.playerStateStream.listen(_onPlayerState),
+      _player.playbackEventStream.listen(null, onError: _onPlayerError),
+    ];
     _init();
   }
+
+  /// Lines synthesized and queued ahead of the one playing. Synthesis runs
+  /// several times faster than speech, so a few lines cover a slow sentence.
+  static const _lookahead = 3;
 
   final Book _book;
   final LibraryRepository _library;
@@ -75,14 +114,42 @@ class ReaderController extends ChangeNotifier {
 
   int _session = 0;
   Timer? _saveTimer;
-  Completer<void>? _clipEnd;
+  late final List<StreamSubscription<Object?>> _subs;
+
+  /// The playlist, index for index with the player's.
+  final List<_QueuedLine> _queue = [];
+
+  /// Where the producer will pick up next — may be chapters ahead of the one
+  /// on screen.
+  _ChapterData? _prodChapter;
+  int _prodCursor = 0;
+
+  /// Set once the producer has queued the book's last line, or hit a chapter
+  /// it can't open ([_prodBlockedChapter]).
+  bool _prodDone = false;
+  int? _prodBlockedChapter;
+
+  /// Wakes the producer when the player moves on or playback is reset.
+  Completer<void>? _advance;
+
+  /// Last `playing` value the player reported, to tell its own transitions
+  /// (lock screen, headset, a phone call) from ours.
+  bool _playerPlaying = false;
 
   int _autoScrollDepth = 0;
   DateTime? _autoScrollSettledAt;
 
-  /// Paragraph of the sentence spoken last, so a paragraph break can be heard
-  /// as well as seen.
+  /// Paragraph of the line queued last, so a paragraph break can be heard as
+  /// well as seen.
   int? _lastSpokenParagraph;
+
+  /// True until the first line of a run is queued — pressing play should
+  /// speak straight away.
+  bool _runStart = true;
+
+  /// Guards [_finishPlayback], which both the producer and the player's
+  /// completion can reach.
+  bool _finishing = false;
 
   /// Set when a "……" line was skipped, so the pause in front of the next
   /// spoken line is a scene break rather than an ordinary paragraph break.
@@ -221,16 +288,10 @@ class ReaderController extends ChangeNotifier {
     _safeNotify();
     try {
       _chapterIndex = index.clamp(0, _book.chapterCount - 1);
-      _chapterText = await _library.loadChapterText(_book, _chapterIndex);
-      _paragraphs = parser.segment(_chapterText);
-      _sentences = [
-        for (final p in _paragraphs) ...p.sentences,
-      ];
+      _show(await _fetchChapter(_chapterIndex));
       _cursor = atEnd
           ? (_sentences.isEmpty ? 0 : _sentences.length - 1)
           : sentenceIndex.clamp(0, _sentences.isEmpty ? 0 : _sentences.length - 1);
-      _lastSpokenParagraph = null;
-      _pendingBeat = false;
       _status = ReaderStatus.ready;
       _error = null;
       _lockReason = null;
@@ -249,6 +310,26 @@ class ReaderController extends ChangeNotifier {
     }
     _safeNotify();
     highlightTick.value++;
+  }
+
+  Future<_ChapterData> _fetchChapter(int index) async {
+    final text = await _library.loadChapterText(_book, index);
+    final paragraphs = parser.segment(text);
+    return _ChapterData(index, text, paragraphs, [
+      for (final p in paragraphs) ...p.sentences,
+    ]);
+  }
+
+  _ChapterData get _shown =>
+      _ChapterData(_chapterIndex, _chapterText, _paragraphs, _sentences);
+
+  /// Puts [data] on screen. Pagination follows on the next [layout] call,
+  /// since the chapter no longer matches the one last paginated.
+  void _show(_ChapterData data) {
+    _chapterIndex = data.index;
+    _chapterText = data.text;
+    _paragraphs = data.paragraphs;
+    _sentences = data.sentences;
   }
 
   /// Re-attempts loading the chapter that just failed to unlock — call after
@@ -282,6 +363,7 @@ class ReaderController extends ChangeNotifier {
 
   /// Re-reads the installed voices — call after the user downloads one.
   Future<void> reloadVoice() async {
+    await stop();
     await _engine.dispose();
     await _prepareVoice();
   }
@@ -323,96 +405,147 @@ class ReaderController extends ChangeNotifier {
     _playing = true;
     _safeNotify();
 
+    // Paused on the line still on screen: carry on where the player stopped.
+    final index = _player.currentIndex;
+    if (index != null && index < _queue.length) {
+      final line = _queue[index];
+      if (line.chapter.index == _chapterIndex && line.sentence == _cursor) {
+        unawaited(_player.play());
+        return;
+      }
+    }
+
     final session = ++_session;
+    _buffering = true;
+    _safeNotify();
+    highlightTick.value++;
+    await _clearQueue();
+    if (session != _session) return;
+    _prodChapter = _shown;
+    _prodCursor = _cursor;
+    _prodDone = false;
+    _prodBlockedChapter = null;
+    _lastSpokenParagraph = null;
+    _pendingBeat = false;
+    _runStart = true;
+    unawaited(_produce(session));
+  }
+
+  /// Keeps the playlist [_lookahead] lines ahead of the player until the
+  /// book runs out or [session] is superseded.
+  Future<void> _produce(int session) async {
+    bool live() => session == _session && !_disposed;
     try {
-      while (_playing && session == _session && !_disposed) {
-        if (_cursor >= _sentences.length) {
-          if (_chapterIndex + 1 >= _book.chapterCount) {
-            // End of the book: park the highlight on the last sentence rather
-            // than letting it fall back to the top of the chapter.
-            _cursor = _sentences.length - 1;
-            break;
+      while (live()) {
+        final playingIndex = _player.currentIndex ?? 0;
+        if (_queue.length - playingIndex > _lookahead) {
+          final wake = _advance = Completer<void>();
+          await wake.future;
+          continue;
+        }
+
+        final next = await _nextLine();
+        if (!live()) return;
+        if (next == null) {
+          _prodDone = true;
+          // Nothing left to queue and nothing left to play.
+          if (_queue.isEmpty ||
+              _player.processingState == ProcessingState.completed) {
+            await _finishPlayback();
           }
-          await _loadChapter(_chapterIndex + 1);
-          if (session != _session) return;
-          continue;
-        }
-
-        final sentence = _sentences[_cursor];
-        if (!sentence.isSpeakable) {
-          // "……" on a line of its own is a beat, not a word. The wait happens
-          // in front of the next spoken line, so two such lines in a row still
-          // add up to one scene break rather than two.
-          if (sentence.isPauseMark) _pendingBeat = true;
-          _cursor++;
-          continue;
-        }
-
-        _buffering = true;
-        _safeNotify();
-        highlightTick.value++;
-
-        final SynthesizedClip clip;
-        try {
-          clip = await _engine.synthesize(
-            sentence.text,
-            speakerId: _speakerId,
-          );
-        } on Object catch (e) {
-          if (session != _session) return;
-          _error = 'Lỗi tổng hợp giọng nói: $e';
-          _playing = false;
-          _safeNotify();
           return;
         }
-        if (session != _session || !_playing || _disposed) return;
 
-        _buffering = false;
-        _safeNotify();
-        unawaited(_prefetch(_cursor));
+        final (line, gapMs) = next;
+        final clip = await _engine.synthesize(
+          line.chapter.sentences[line.sentence].text,
+          speakerId: _speakerId,
+        );
+        if (!live()) return;
+        final path = await _engine.withLeadingSilence(clip.path, gapMs);
+        if (!live()) return;
 
-        // Speed is a player property that survives a source change, so set it
-        // before loading: applying it afterwards lets the first moments of the
-        // clip play at the previous rate.
-        if (_player.speed != _settings.speed) {
-          await _player.setSpeed(_settings.speed);
+        final source = AudioSource.file(path, tag: await _mediaItem(line));
+        if (!live()) return;
+        final starved = _player.processingState == ProcessingState.completed;
+        _queue.add(line);
+        if (_queue.length == 1) {
+          if (_player.speed != _settings.speed) {
+            await _player.setSpeed(_settings.speed);
+          }
+          await _player.setAudioSources([source]);
+          if (!live()) return;
+          if (_playing) unawaited(_player.play());
+        } else {
+          await _player.addAudioSource(source);
+          // The player ran dry and stopped on the last line; it does not
+          // move on by itself when more are added.
+          if (starved && live()) {
+            await _player.seek(Duration.zero, index: _queue.length - 1);
+          }
         }
-
-        // The break has to happen BEFORE the next source is loaded. just_audio
-        // leaves `playing` true once a clip ends, and loading a source while
-        // playing sends a play request straight away — so a delay placed after
-        // setFilePath is simply swallowed by audio that has already started.
-        final gap = _gapBefore(sentence);
-        if (gap > Duration.zero) {
-          await Future<void>.delayed(gap);
-          if (session != _session || !_playing || _disposed) return;
-        }
-        _lastSpokenParagraph = sentence.paragraphIndex;
-        _pendingBeat = false;
-
-        await _player.setFilePath(clip.path);
-        if (session != _session || !_playing) return;
-        await _player.play();
-        await _awaitClipEnd(clip.duration);
-
-        if (session != _session || !_playing || _disposed) return;
-        _cursor++;
-        _scheduleSave();
       }
-    } finally {
-      if (session == _session && !_disposed) {
-        _playing = false;
-        _buffering = false;
-        _safeNotify();
-      }
+    } on Object catch (e) {
+      if (!live()) return;
+      _error = 'Lỗi tổng hợp giọng nói: $e';
+      await stop();
     }
   }
 
-  /// Silence to insert before [sentence]. Divided by the playback rate so the
-  /// pacing keeps its proportions when listening fast.
-  Duration _gapBefore(Sentence sentence) {
+  /// The next line to queue and the pause in front of it, crossing into the
+  /// next chapter when this one runs out. Null at the end of the book, or at
+  /// a chapter that can't be opened (see [_prodBlockedChapter]).
+  Future<(_QueuedLine, int)?> _nextLine() async {
+    var chapter = _prodChapter!;
+    while (true) {
+      if (_prodCursor >= chapter.sentences.length) {
+        final nextIndex = chapter.index + 1;
+        if (nextIndex >= _book.chapterCount) return null;
+        try {
+          chapter = _prodChapter = await _fetchChapter(nextIndex);
+        } on Object {
+          _prodBlockedChapter = nextIndex;
+          return null;
+        }
+        _prodCursor = 0;
+        // A new chapter reads as a scene break.
+        _pendingBeat = true;
+        continue;
+      }
+
+      final sentence = chapter.sentences[_prodCursor];
+      if (!sentence.isSpeakable) {
+        // "……" on a line of its own is a beat, not a word. The wait happens
+        // in front of the next spoken line, so two such lines in a row still
+        // add up to one scene break rather than two.
+        if (sentence.isPauseMark) _pendingBeat = true;
+        _prodCursor++;
+        continue;
+      }
+
+      final gapMs = _gapMsBefore(sentence);
+      _lastSpokenParagraph = sentence.paragraphIndex;
+      _pendingBeat = false;
+      _runStart = false;
+      return (_QueuedLine(chapter, _prodCursor++), gapMs);
+    }
+  }
+
+  Future<MediaItem> _mediaItem(_QueuedLine line) async {
+    final chapter = _book.chapters[line.chapter.index];
+    return MediaItem(
+      id: '${_book.id}/${line.chapter.index}/${line.sentence}',
+      title: chapter.title,
+      album: _book.title,
+      artUri: await nowPlayingArt(),
+    );
+  }
+
+  /// Silence to put in front of [sentence]. It is part of the clip, so the
+  /// playback rate scales it along with the speech.
+  int _gapMsBefore(Sentence sentence) {
     final ms = pauseMsFor(
-      isFirst: _lastSpokenParagraph == null,
+      isFirst: _runStart,
       afterBeat: _pendingBeat,
       newParagraph: sentence.paragraphIndex != _lastSpokenParagraph,
       startsSentence: sentence.startsSentence,
@@ -421,63 +554,104 @@ class ReaderController extends ChangeNotifier {
       sentenceMs: _settings.sentencePauseMs,
       clauseMs: _settings.clausePauseMs,
     );
-    return Duration(milliseconds: (ms / _settings.speed).round());
+    return ms.round();
   }
 
-  /// Waits until the current clip has actually finished.
-  ///
-  /// `AudioPlayer.play()` cannot be used for this. just_audio returns from
-  /// `play()` immediately when `playing` is already true, and it leaves
-  /// `playing` true after a clip reaches its end — so from the second sentence
-  /// onwards `await play()` completed instantly and the loop cut the sentence
-  /// off mid-word. The end of a clip is only visible through
-  /// `ProcessingState.completed`.
-  Future<void> _awaitClipEnd(Duration clipDuration) async {
-    if (_player.processingState == ProcessingState.completed) return;
+  void _onPlayerIndex(int? index) {
+    if (index == null || index >= _queue.length || _disposed) return;
+    final line = _queue[index];
+    if (line.chapter.index != _chapterIndex) {
+      // Listening ran on into the next chapter; bring it on screen.
+      _show(line.chapter);
+      _status = ReaderStatus.ready;
+    }
+    _cursor = line.sentence;
+    _buffering = false;
+    _safeNotify();
+    highlightTick.value++;
+    _scheduleSave();
+    _wakeProducer();
+  }
 
-    final done = Completer<void>();
-    _clipEnd = done;
-    final sub = _player.processingStateStream.listen((state) {
-      if (state == ProcessingState.completed && !done.isCompleted) {
-        done.complete();
+  void _onPlayerState(PlayerState state) {
+    if (_disposed) return;
+    if (state.processingState == ProcessingState.completed) {
+      if (_prodDone) {
+        unawaited(_finishPlayback());
+      } else if (_playing && !_buffering) {
+        // Ran dry: the producer will restart the player when it catches up.
+        _buffering = true;
+        _safeNotify();
       }
-    });
-    try {
-      // A clip that never reports completion (a decode error, a player left in
-      // a bad state) must not wedge playback forever. The bound assumes the
-      // slowest playback rate the UI offers.
-      await done.future.timeout(
-        Duration(milliseconds: clipDuration.inMilliseconds * 2 + 10000),
-        onTimeout: () {},
-      );
-    } finally {
-      await sub.cancel();
-      if (identical(_clipEnd, done)) _clipEnd = null;
+      _wakeProducer();
+    }
+
+    // Follow play/pause from outside the app — the lock screen, a headset
+    // button, an incoming call.
+    if (state.playing == _playerPlaying) return;
+    _playerPlaying = state.playing;
+    if (state.playing && !_playing) {
+      _playing = true;
+      _safeNotify();
+    } else if (!state.playing && _playing) {
+      _playing = false;
+      _buffering = false;
+      _safeNotify();
+      _saveProgressNow();
     }
   }
 
-  /// Releases a pending [_awaitClipEnd] so the playback loop can unwind.
-  void _breakClipWait() {
-    final pending = _clipEnd;
-    _clipEnd = null;
-    if (pending != null && !pending.isCompleted) pending.complete();
+  void _onPlayerError(Object error, StackTrace _) {
+    if (_disposed) return;
+    _error = 'Lỗi phát âm thanh: $error';
+    unawaited(stop());
+  }
+
+  /// The last queued line has played out.
+  Future<void> _finishPlayback() async {
+    if (_finishing) return;
+    _finishing = true;
+    try {
+      final blocked = _prodBlockedChapter;
+      _prodDone = false;
+      _prodBlockedChapter = null;
+      await stop();
+      if (blocked != null && !_disposed) {
+        // Show why listening stopped (sign in, unlock) on the chapter itself.
+        await _loadChapter(blocked);
+      }
+    } finally {
+      _finishing = false;
+    }
+  }
+
+  void _wakeProducer() {
+    final wake = _advance;
+    _advance = null;
+    if (wake != null && !wake.isCompleted) wake.complete();
+  }
+
+  Future<void> _clearQueue() async {
+    _queue.clear();
+    await _player.clearAudioSources();
   }
 
   Future<void> pause() async {
     _playing = false;
-    _session++;
     await _player.pause();
-    _breakClipWait();
     _buffering = false;
     _safeNotify();
     _saveProgressNow();
   }
 
+  /// Ends listening altogether: drops the queue and, with it, the lock-screen
+  /// controls and the background service.
   Future<void> stop() async {
     _playing = false;
     _session++;
+    _wakeProducer();
     await _player.stop();
-    _breakClipWait();
+    await _clearQueue();
     _buffering = false;
     _safeNotify();
   }
@@ -486,41 +660,23 @@ class ReaderController extends ChangeNotifier {
   Future<void> jumpTo(int sentenceIndex, {bool keepPlaying = true}) async {
     if (_sentences.isEmpty) return;
     final wasPlaying = _playing;
-    _playing = false;
-    _session++;
-    await _player.stop();
-    _breakClipWait();
+    if (wasPlaying) {
+      _playing = false;
+      _session++;
+      _wakeProducer();
+      await _player.pause();
+      // Start the chosen line from its beginning, even if it's the one that
+      // was playing.
+      await _clearQueue();
+    }
 
     _cursor = sentenceIndex.clamp(0, _sentences.length - 1);
-    // A deliberate jump should start speaking straight away, with no
-    // paragraph break in front of it.
-    _lastSpokenParagraph = null;
-    _pendingBeat = false;
     _safeNotify();
     highlightTick.value++;
     _saveProgressNow();
 
+    // play() sees the cursor no longer matches the queue and rebuilds it.
     if (wasPlaying && keepPlaying) await play();
-  }
-
-  /// Warms the next couple of sentences so the gap between clips stays short.
-  Future<void> _prefetch(int from) async {
-    var count = 0;
-    for (var i = from + 1; i < _sentences.length && count < 2; i++) {
-      final s = _sentences[i];
-      if (!s.isSpeakable) continue;
-      count++;
-      try {
-        // Same pacing as playback, or the warmed clip lands under a different
-        // cache key and the work is thrown away.
-        await _engine.synthesize(
-          s.text,
-          speakerId: _speakerId,
-        );
-      } on Object {
-        return;
-      }
-    }
   }
 
   void _scheduleSave() {
@@ -565,10 +721,13 @@ class ReaderController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
-    _breakClipWait();
+    _wakeProducer();
     _saveProgressNow();
     _settings.removeListener(_onSettingsChanged);
     _session++;
+    for (final sub in _subs) {
+      sub.cancel();
+    }
     _player.dispose();
     _engine.dispose();
     highlightTick.dispose();

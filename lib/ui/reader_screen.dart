@@ -46,7 +46,8 @@ class _ReaderView extends StatefulWidget {
   State<_ReaderView> createState() => _ReaderViewState();
 }
 
-class _ReaderViewState extends State<_ReaderView> {
+class _ReaderViewState extends State<_ReaderView>
+    with WidgetsBindingObserver {
   PageFlipController? _pageFlipController;
   int? _pageControllerChapter;
   int _lastShownPage = -1;
@@ -61,7 +62,17 @@ class _ReaderViewState extends State<_ReaderView> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     unawaited(enableScreenCaptureProtection());
+  }
+
+  /// Listening carries on in the background, where no frames are drawn and a
+  /// page flip can't run. Catch the page up in one cut on return, while it is
+  /// still flagged as our own move — a flip left to finish late would look
+  /// like a hand-swipe and pause playback.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) unawaited(_onHighlightMoved());
   }
 
   @override
@@ -152,6 +163,9 @@ class _ReaderViewState extends State<_ReaderView> {
     final controller = _controller;
     if (controller == null || !mounted) return;
     if (!context.read<AppSettings>().autoScroll) return;
+    // Off screen: leave the page alone; didChangeAppLifecycleState catches up.
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    if (lifecycle != null && lifecycle != AppLifecycleState.resumed) return;
     final pageFlip = _pageFlipController;
     if (pageFlip == null || !pageFlip.isAttached) return;
 
@@ -181,6 +195,7 @@ class _ReaderViewState extends State<_ReaderView> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _controller?.highlightTick.removeListener(_onHighlightMoved);
     unawaited(disableScreenCaptureProtection());
     super.dispose();

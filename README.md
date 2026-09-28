@@ -68,8 +68,22 @@ của một `TextSpan` — chữ không bao giờ bị nhảy dòng khi câu đa
 
 **Mỗi câu là một clip.** Engine tổng hợp từng câu một rồi phát tuần tự. Đây
 là cách rẻ nhất để biết chính xác câu nào đang phát mà không cần alignment
-theo âm vị. Đổi lại phải giấu độ trễ tổng hợp: `ReaderController._prefetch`
-dựng sẵn 2 câu kế tiếp trong lúc câu hiện tại đang phát.
+theo âm vị. Đổi lại phải giấu độ trễ tổng hợp: `ReaderController._produce`
+dựng sẵn 3 câu kế tiếp và nối vào playlist của player trong lúc câu hiện tại
+đang phát; `currentIndexStream` cho biết câu nào đang đọc để dời highlight.
+
+**Nghe khi tắt màn hình.** Player không bao giờ đứng yên giữa hai câu: quãng
+nghỉ được ghép thẳng vào đầu file WAV (`TtsEngine.withLeadingSilence`) thay vì
+chờ bằng `Future.delayed`, và playlist chạy xuyên qua ranh giới chương. Một
+player đứng yên lúc app ở nền là iOS treo app ngay, câu sau không bao giờ bắt
+đầu. `just_audio_background` lo phần điều khiển trên màn hình khoá / thông báo
+và foreground service trên Android; chúng chỉ tồn tại khi playlist có câu, nên
+chỉ đọc chữ thì không có gì chạy nền. Rời màn hình đọc là dừng hẳn.
+
+Ở nền không có frame nào được vẽ nên hiệu ứng lật trang không chạy; màn hình
+đọc bỏ qua việc lật trang lúc đó và cắt thẳng tới trang đang đọc khi quay lại
+(`didChangeAppLifecycleState`). Nếu để các lần lật trang dồn lại chạy muộn,
+chúng bị hiểu nhầm là người dùng tự lướt trang và dừng phát.
 
 **sherpa-onnx chạy trong isolate riêng.** Inference VITS là tác vụ CPU chặn
 (~0.2× thời gian thực trên Mac, chậm hơn trên điện thoại). `TtsEngine` giữ
@@ -81,15 +95,6 @@ nhưng dùng nó thì mỗi lần kéo thanh tốc độ là phải tổng hợp
 luôn render ở 1.0× và đổi `AudioPlayer.setSpeed` — đổi tức thì, và cache clip
 vẫn dùng được.
 
-**Chờ `ProcessingState.completed`, không chờ `play()`.** just_audio có
-`if (playing) return;` ở đầu `play()`, và nó **không** đặt `playing = false`
-khi một clip phát hết. Nên từ câu thứ hai trở đi `await player.play()` trả về
-tức thì, vòng lặp tăng con trỏ và nạp clip kế tiếp — cắt ngang câu đang đọc.
-`ReaderController._awaitClipEnd` lắng nghe `processingStateStream` để biết clip
-thật sự kết thúc, kèm một timeout theo độ dài clip để một file hỏng không làm
-treo vòng lặp. Đo lại trên máy thật: 6478 ms clip phát hết trong 4419 ms ở
-1.5× (kỳ vọng 4319 ms).
-
 **Con trỏ phát và highlight là một.** Việc theo dõi cuộn tay (`noteVisibleRange`)
 từng ghi đè con trỏ phát mà không `notifyListeners()`, nên highlight đứng ở câu
 người dùng chạm còn `play()` lại bắt đầu ở câu khác. Ba luật hiện tại:
@@ -100,7 +105,7 @@ và mọi thay đổi con trỏ đều notify. Luật nằm trong hàm thuần
 `resolveBrowseCursor` để test được — xem `test/browse_cursor_test.dart`.
 
 **Nhịp nghỉ: ba mức, cùng một cơ chế.** Văn bản được cắt thành mệnh đề, mỗi
-mệnh đề là một clip, và khoảng nghỉ là `Future.delayed` giữa hai clip:
+mệnh đề là một clip, và khoảng nghỉ là đoạn im lặng ghép vào đầu clip sau:
 
 | Nghỉ ở đâu | Mặc định | Đối chiếu tài liệu |
 | --- | --- | --- |
@@ -154,17 +159,8 @@ Cắt theo văn bản thì chính xác tuyệt đối vì ta biết dấu phẩy
 phẩy được **giữ lại trong mệnh đề** để model vẫn lên giọng như một câu chưa
 kết thúc. Mệnh đề ngắn hơn 12 ký tự thì không tách (`Hắn nói:` phải đi liền).
 
-Hai giá trị delay chia cho tốc độ phát nên nhịp giữ nguyên tỉ lệ khi nghe nhanh.
-
-Thứ tự trong vòng phát rất quan trọng: **delay phải đặt trước `setFilePath`**.
-just_audio để `playing` ở `true` sau khi một clip kết thúc, và khi nạp nguồn mới
-lúc `playing` đang true nó gửi lệnh play ngay (`just_audio.dart`, nhánh
-`if (playing) _sendPlayRequest(...)` trong `_setPlatformActive`). Đặt delay sau
-`setFilePath` thì tiếng đã chạy rồi, quãng nghỉ bị nuốt sạch — đo được
-`idleBefore=0ms` dù `want=1100ms`. Sau khi chuyển lên trước: `want=1100ms →
-real=1103ms`. `setSpeed` cũng chuyển lên trước vì cùng lý do (nếu không, mấy
-trăm mili giây đầu clip phát ở tốc độ cũ); tốc độ là thuộc tính của player nên
-nó sống qua lần đổi nguồn.
+Khoảng im lặng nằm trong audio nên tốc độ phát co giãn nó cùng với lời đọc —
+nhịp giữ nguyên tỉ lệ khi nghe nhanh.
 
 `silenceScale` của sherpa-onnx **không** dùng được cho việc này, dù đúng là nó
 sinh ra để làm việc đó. `ScaleSilence` chỉ đụng vào khoảng lặng dài hơn 200 ms,
@@ -279,7 +275,7 @@ dart run tool/tts_smoke.dart /tmp/tts_smoke    # kiểm tra tải + giải nén 
 `tool/tts_smoke.dart` chạy headless: tải gói giọng, giải nén bằng `archive`,
 rồi tổng hợp 3 câu tiếng Việt và in RTF. Trên MacBook Pro (Apple Silicon),
 VAIS 1000 int8 cho RTF ≈ 0.20 — tức khoảng 0.5 giây để dựng 2.8 giây tiếng nói,
-nên prefetch 2 câu là đủ để nghe liền mạch.
+nên dựng trước 3 câu là đủ để nghe liền mạch.
 
 Đã chạy thử tay trên iPhone 17 Pro Simulator (iOS 26.2) với truyện thật
 (`Chuong1-5.txt`, 5 chương, 48.6k chữ): nhập truyện, tải giọng, phát audio,

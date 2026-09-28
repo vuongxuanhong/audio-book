@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:just_audio_background/just_audio_background.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/voice.dart';
@@ -51,7 +52,11 @@ class _SpeakerPickerState extends State<_SpeakerPicker> {
       await _engine.start(widget.voice);
       final clip = await _engine.synthesize(_probe, speakerId: sid);
       if (!mounted) return;
-      await _player.setFilePath(clip.path);
+      // just_audio_background needs a MediaItem on every source.
+      await _player.setAudioSource(AudioSource.file(
+        clip.path,
+        tag: MediaItem(id: 'preview-$sid', title: 'Nghe thử giọng ${sid + 1}'),
+      ));
       await _player.play();
     } on Object catch (e) {
       if (mounted) setState(() => _error = e.toString());
