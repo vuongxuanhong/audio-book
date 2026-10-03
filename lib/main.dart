@@ -96,13 +96,20 @@ class AudioBookApp extends StatelessWidget {
       seedColor: const Color(0xFF6B4EFF),
       brightness: brightness,
     );
+    final light = brightness == Brightness.light;
     return ThemeData(
       colorScheme: scheme,
       useMaterial3: true,
-      scaffoldBackgroundColor: brightness == Brightness.light
-          ? const Color(0xFFFBF8F3)
-          : const Color(0xFF14131A),
-      appBarTheme: const AppBarTheme(centerTitle: false),
+      scaffoldBackgroundColor:
+          light ? const Color(0xFFFBF8F3) : const Color(0xFF14131A),
+      // In light mode the default bar colour (surface) is all but the same
+      // as the cream page, so the bar didn't read as a bar. The reader's own
+      // top bar uses the same colour.
+      appBarTheme: AppBarTheme(
+        centerTitle: false,
+        backgroundColor: light ? scheme.primaryContainer : null,
+        foregroundColor: light ? scheme.onPrimaryContainer : null,
+      ),
     );
   }
 }

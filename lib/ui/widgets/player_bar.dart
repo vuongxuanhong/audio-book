@@ -83,27 +83,36 @@ class _PlayButton extends StatelessWidget {
         ? controller.listenUnavailableReason
         : null;
     return SizedBox(
-      width: 56,
-      height: 56,
+      width: 48,
+      height: 48,
       child: Stack(
         alignment: Alignment.center,
         children: [
           if (controller.isBuffering)
             const SizedBox(
-              width: 52,
-              height: 52,
+              width: 48,
+              height: 48,
               child: CircularProgressIndicator(strokeWidth: 2),
             ),
-          FloatingActionButton(
+          // Small and round: a full-size FAB is too heavy for a bar this
+          // slim; the buffering ring hugs its edge.
+          FloatingActionButton.small(
             heroTag: 'reader-play',
             elevation: 0,
+            shape: const CircleBorder(),
             // Looks disabled when there's nothing to listen to, but still
             // answers a tap with why — a truly disabled button just ignores
             // it, and a tooltip only shows on long press.
-            backgroundColor:
-                enabled ? null : scheme.onSurface.withValues(alpha: 0.12),
-            foregroundColor:
-                enabled ? null : scheme.onSurface.withValues(alpha: 0.38),
+            //
+            // Enabled, it's the solid primary colour: the FAB's default
+            // (primaryContainer) is a pale tint that all but vanished
+            // against the bar.
+            backgroundColor: enabled
+                ? scheme.primary
+                : scheme.onSurface.withValues(alpha: 0.12),
+            foregroundColor: enabled
+                ? scheme.onPrimary
+                : scheme.onSurface.withValues(alpha: 0.38),
             onPressed: enabled
                 ? controller.toggle
                 : reason == null

@@ -473,8 +473,10 @@ class _TopBar extends StatelessWidget {
     // Fully opaque: this floats over the page, and any translucency lets the
     // text underneath show through the bar instead of reading as content
     // that sits below it.
+    // Same colour as the app's AppBar, so it reads as a bar on the page.
+    final barTheme = theme.appBarTheme;
     return Material(
-      color: theme.colorScheme.surface,
+      color: barTheme.backgroundColor ?? theme.colorScheme.surface,
       elevation: 2,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(4, 4, 4, 4),
@@ -484,7 +486,8 @@ class _TopBar extends StatelessWidget {
             Expanded(
               child: Text(
                 controller.book.title,
-                style: theme.textTheme.titleMedium,
+                style: theme.textTheme.titleMedium
+                    ?.copyWith(color: barTheme.foregroundColor),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
