@@ -48,6 +48,11 @@ section nào trống thì ẩn:
 - **Truyện mới** — `GET /v1/books?sort=new`, mới thêm lên đầu, cuộn tới cuối
   thì tải trang tiếp.
 
+Truyện nổi bật và Truyện mới hiển thị dạng lưới 2 cột kèm ảnh bìa
+(`cover_url`, đặt bằng `python -m scripts.set_book_cover <book_id> anh.jpg` ở
+backend). Truyện chưa có ảnh dùng bìa tạm: màu chọn theo tên truyện, in tên
+truyện lên.
+
 ## Kiến trúc
 
 ```

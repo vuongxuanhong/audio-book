@@ -96,14 +96,16 @@ class LibraryRepository {
       importedAt: DateTime.now(),
       chapters: chapters,
       remoteId: meta.id,
+      coverUrl: meta.coverUrl,
     );
     File('${dir.path}/book.json').writeAsStringSync(book.encode());
     return book;
   }
 
-  /// Re-reads which of a remote book's chapters have narration — audio gets
-  /// attached on the backend after a book is already in the library — and
-  /// saves the result. Throws when the book detail can't be fetched.
+  /// Re-reads what may have changed on the server since the book was added —
+  /// which chapters have narration (audio gets attached later) and the
+  /// cover — and saves the result. Throws when the book detail can't be
+  /// fetched.
   Future<Book> refreshAudioAvailability(Book book) async {
     final remote = _remote;
     if (remote == null || !book.isRemote) return book;
@@ -112,7 +114,7 @@ class LibraryRepository {
     return saveBook(book.copyWith(chapters: [
       for (final c in book.chapters)
         c.copyWith(hasAudio: hasAudio[c.remoteChapterId]),
-    ]));
+    ]).withCover(meta.coverUrl));
   }
 
   Future<Book> saveBook(Book book) async {

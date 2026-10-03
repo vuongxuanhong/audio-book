@@ -41,6 +41,7 @@ class RemoteBookSummary {
     required this.chapterCount,
     required this.totalChars,
     this.totalDurationMs = 0,
+    this.coverUrl,
   });
 
   final String id;
@@ -54,6 +55,9 @@ class RemoteBookSummary {
 
   bool get hasAudio => totalDurationMs > 0;
 
+  /// Public cover image; null when the book has none yet.
+  final String? coverUrl;
+
   factory RemoteBookSummary.fromJson(Map<String, dynamic> json) => RemoteBookSummary(
         id: json['id'] as String,
         title: json['title'] as String,
@@ -61,6 +65,7 @@ class RemoteBookSummary {
         chapterCount: json['chapter_count'] as int,
         totalChars: json['total_chars'] as int,
         totalDurationMs: json['total_duration_ms'] as int? ?? 0,
+        coverUrl: json['cover_url'] as String?,
       );
 }
 
@@ -77,17 +82,20 @@ class RemoteBookMeta {
     required this.title,
     required this.author,
     required this.chapters,
+    this.coverUrl,
   });
 
   final String id;
   final String title;
   final String author;
   final List<RemoteChapterRef> chapters;
+  final String? coverUrl;
 
   factory RemoteBookMeta.fromJson(Map<String, dynamic> json) => RemoteBookMeta(
         id: json['id'] as String,
         title: json['title'] as String,
         author: json['author'] as String,
+        coverUrl: json['cover_url'] as String?,
         chapters: (json['chapters'] as List<dynamic>)
             .map((e) => RemoteChapterRef.fromJson(e as Map<String, dynamic>))
             .toList(growable: false),

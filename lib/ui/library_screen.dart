@@ -5,6 +5,7 @@ import '../models/book.dart';
 import '../services/remote_book_service.dart';
 import '../state/library_controller.dart';
 import 'reader_screen.dart';
+import 'widgets/book_cover.dart';
 import 'widgets/app_settings_sheet.dart';
 
 /// Home: "Đọc tiếp" (books with a saved position on this device), then the
@@ -90,31 +91,11 @@ class LibraryScreen extends StatelessWidget {
               ],
               if (featured.isNotEmpty) ...[
                 const _SectionHeader('Truyện nổi bật'),
-                SliverToBoxAdapter(
-                  child: SizedBox(
-                    height: 228,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      itemCount: featured.length,
-                      separatorBuilder: (_, _) => const SizedBox(width: 12),
-                      itemBuilder: (context, i) =>
-                          _FeaturedCard(item: featured[i]),
-                    ),
-                  ),
-                ),
+                _BookGrid(items: featured),
               ],
               if (newBooks.isNotEmpty) ...[
                 const _SectionHeader('Truyện mới'),
-                SliverPadding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  sliver: SliverList.separated(
-                    itemCount: newBooks.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 8),
-                    itemBuilder: (context, i) =>
-                        _NewBookTile(item: newBooks[i]),
-                  ),
-                ),
+                _BookGrid(items: newBooks),
                 if (controller.hasMoreNew)
                   const SliverToBoxAdapter(
                     child: Padding(
@@ -180,29 +161,6 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
-class _Cover extends StatelessWidget {
-  const _Cover({required this.width, required this.height});
-
-  final double width;
-  final double height;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      width: width,
-      height: height,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(6),
-        color: scheme.primaryContainer,
-      ),
-      alignment: Alignment.center,
-      child: Icon(Icons.auto_stories_outlined,
-          size: width * 0.45, color: scheme.onPrimaryContainer),
-    );
-  }
-}
-
 class _ContinueTile extends StatelessWidget {
   const _ContinueTile({required this.book});
 
@@ -228,7 +186,11 @@ class _ContinueTile extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const _Cover(width: 44, height: 60),
+              SizedBox(
+                width: 44,
+                height: 66,
+                child: BookCover(title: book.title, url: book.coverUrl, radius: 4),
+              ),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
@@ -297,97 +259,93 @@ class _ContinueTile extends StatelessWidget {
   }
 }
 
-class _FeaturedCard extends StatelessWidget {
-  const _FeaturedCard({required this.item});
+/// Two columns of covers with their titles — for the server's lists.
+class _BookGrid extends StatelessWidget {
+  const _BookGrid({required this.items});
 
-  final RemoteBookSummary item;
+  final List<RemoteBookSummary> items;
+
+  static const _columns = 2;
+  static const _spacing = 12.0;
+  static const _padding = 12.0;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return SizedBox(
-      width: 128,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(8),
-        onTap: () => _openRemote(context, item),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const _Cover(width: 128, height: 160),
-            const SizedBox(height: 8),
-            Text(item.title,
-                style: theme.textTheme.titleSmall,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis),
-            if (item.author.isNotEmpty)
-              Text(item.author,
-                  style: theme.textTheme.bodySmall,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis),
-          ],
-        ),
+    final textScaler = MediaQuery.textScalerOf(context);
+    return SliverPadding(
+      padding: const EdgeInsets.symmetric(horizontal: _padding),
+      sliver: SliverLayoutBuilder(
+        builder: (context, constraints) {
+          final width = (constraints.crossAxisExtent - _spacing * (_columns - 1)) / _columns;
+          // A 2:3 cover, then two lines of title and one of details.
+          final extent = width * 1.5 + 8 + textScaler.scale(20) * 2 + 4 + textScaler.scale(18) + 4;
+          return SliverGrid.builder(
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: _columns,
+              crossAxisSpacing: _spacing,
+              mainAxisSpacing: 16,
+              mainAxisExtent: extent,
+            ),
+            itemCount: items.length,
+            itemBuilder: (context, i) => _BookCard(item: items[i]),
+          );
+        },
       ),
     );
   }
 }
 
-class _NewBookTile extends StatelessWidget {
-  const _NewBookTile({required this.item});
+class _BookCard extends StatelessWidget {
+  const _BookCard({required this.item});
 
   final RemoteBookSummary item;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      margin: EdgeInsets.zero,
-      child: InkWell(
-        onTap: () => _openRemote(context, item),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    final details = theme.textTheme.bodySmall;
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: () => _openRemote(context, item),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          AspectRatio(
+            aspectRatio: 2 / 3,
+            child: BookCover(title: item.title, url: item.coverUrl, radius: 8),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            item.title,
+            style: theme.textTheme.titleSmall?.copyWith(height: 1.25),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 4),
+          Row(
             children: [
-              const _Cover(width: 44, height: 60),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(item.title,
-                        style: theme.textTheme.titleMedium,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis),
-                    if (item.author.isNotEmpty) ...[
-                      const SizedBox(height: 2),
-                      Text(item.author,
-                          style: theme.textTheme.bodySmall,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis),
-                    ],
-                    const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        Text('${item.chapterCount} chương',
-                            style: theme.textTheme.bodySmall),
-                        if (item.hasAudio) ...[
-                          const SizedBox(width: 10),
-                          Icon(Icons.headphones_outlined,
-                              size: 14, color: theme.colorScheme.primary),
-                          const SizedBox(width: 4),
-                          Text('Có bản đọc',
-                              style: theme.textTheme.bodySmall
-                                  ?.copyWith(color: theme.colorScheme.primary)),
-                        ],
-                      ],
-                    ),
-                  ],
+              Flexible(
+                child: Text(
+                  item.author.isNotEmpty
+                      ? item.author
+                      : '${item.chapterCount} chương',
+                  style: details,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
+              if (item.hasAudio) ...[
+                const SizedBox(width: 6),
+                Icon(
+                  Icons.headphones_outlined,
+                  size: 14,
+                  color: theme.colorScheme.primary,
+                  semanticLabel: 'Có bản đọc',
+                ),
+              ],
             ],
           ),
-        ),
+        ],
       ),
     );
   }

@@ -49,6 +49,7 @@ dependencies:
   just_audio_background: ^0.0.1-beta.17
   audio_session: ^0.2.4
   flutter_svg: ^2.3.0
+  cached_network_image: ^4.0.4
 
 dev_dependencies:
   flutter_test:

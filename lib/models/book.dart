@@ -71,6 +71,7 @@ class Book {
     required this.importedAt,
     required this.chapters,
     this.remoteId,
+    this.coverUrl,
   });
 
   final String id;
@@ -87,6 +88,9 @@ class Book {
 
   bool get isRemote => remoteId != null;
 
+  /// The server's cover image; null when the book has none yet.
+  final String? coverUrl;
+
   int get chapterCount => chapters.length;
 
   int get totalChars =>
@@ -99,6 +103,18 @@ class Book {
         importedAt: importedAt,
         chapters: chapters ?? this.chapters,
         remoteId: remoteId,
+        coverUrl: coverUrl,
+      );
+
+  /// This book with [url] as its cover, null for none.
+  Book withCover(String? url) => Book(
+        id: id,
+        title: title,
+        author: author,
+        importedAt: importedAt,
+        chapters: chapters,
+        remoteId: remoteId,
+        coverUrl: url,
       );
 
   factory Book.fromJson(Map<String, dynamic> json) => Book(
@@ -110,6 +126,7 @@ class Book {
             .map((e) => ChapterRef.fromJson(e as Map<String, dynamic>))
             .toList(growable: false),
         remoteId: json['remoteId'] as String?,
+        coverUrl: json['coverUrl'] as String?,
       );
 
   Map<String, dynamic> toJson() => {
@@ -119,6 +136,7 @@ class Book {
         'importedAt': importedAt.toIso8601String(),
         'chapters': chapters.map((c) => c.toJson()).toList(),
         if (remoteId != null) 'remoteId': remoteId,
+        if (coverUrl != null) 'coverUrl': coverUrl,
       };
 
   String encode() => const JsonEncoder.withIndent('  ').convert(toJson());
