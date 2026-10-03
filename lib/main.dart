@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'services/api_client.dart';
+import 'services/app_update_service.dart';
 import 'services/audio_cache.dart';
 import 'services/device_auth.dart';
 import 'services/library_repository.dart';
@@ -14,6 +15,9 @@ import 'services/settings_store.dart';
 import 'state/app_settings.dart';
 import 'state/library_controller.dart';
 import 'ui/library_screen.dart';
+import 'ui/update_gate.dart';
+
+final _navigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -34,11 +38,8 @@ Future<void> main() async {
   final deviceAuth = DeviceAuth();
   final apiClient = ApiClient(deviceAuth);
   final remoteBooks = RemoteBookService(apiClient);
-  final progressSync = ProgressSync(
-    apiClient,
-    remoteBooks,
-    await SharedPreferences.getInstance(),
-  )..start();
+  final prefs = await SharedPreferences.getInstance();
+  final progressSync = ProgressSync(apiClient, remoteBooks, prefs)..start();
   final library = LibraryRepository(remote: remoteBooks, sync: progressSync);
   final audioCache = AudioCache();
 
@@ -48,6 +49,7 @@ Future<void> main() async {
     deviceAuth: deviceAuth,
     remoteBooks: remoteBooks,
     audioCache: audioCache,
+    updateService: AppUpdateService(prefs),
   ));
 }
 
@@ -59,6 +61,7 @@ class AudioBookApp extends StatelessWidget {
     required this.deviceAuth,
     required this.remoteBooks,
     required this.audioCache,
+    required this.updateService,
   });
 
   final SettingsStore store;
@@ -66,6 +69,7 @@ class AudioBookApp extends StatelessWidget {
   final DeviceAuth deviceAuth;
   final RemoteBookService remoteBooks;
   final AudioCache audioCache;
+  final AppUpdateService updateService;
 
   @override
   Widget build(BuildContext context) {
@@ -91,6 +95,12 @@ class AudioBookApp extends StatelessWidget {
           theme: _theme(Brightness.light),
           darkTheme: _theme(Brightness.dark),
           themeMode: settings.themeMode,
+          navigatorKey: _navigatorKey,
+          builder: (context, child) => UpdateGate(
+            service: updateService,
+            navigatorKey: _navigatorKey,
+            child: child!,
+          ),
           home: const LibraryScreen(),
         ),
       ),
