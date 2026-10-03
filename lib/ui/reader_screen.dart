@@ -58,6 +58,17 @@ class _ReaderViewState extends State<_ReaderView>
   int? _pageControllerChapter;
   int _lastShownPage = -1;
 
+  /// The flip index handed to [PageFlipWidget] as `initialIndex`, fixed for
+  /// as long as that widget lives. The widget treats any *change* of
+  /// `initialIndex` as a request to jump there — so deriving it from the
+  /// reading position, which moves on its own while listening, made it jump
+  /// a page on top of the animated turn [_onHighlightMoved] had just started
+  /// (two pages forward, then one back). Following the narration goes
+  /// through nextPage/previousPage/goToPage only; this is just where a fresh
+  /// widget opens. Cleared whenever the page view is not on screen, so it is
+  /// recomputed when it comes back.
+  int? _flipInitialIndex;
+
   // Read mode: control chrome starts hidden and only appears when the user
   // taps the page (never on a swipe). Listen mode (audio playing) always
   // shows it instead — see `chromeVisible` in build().
@@ -216,6 +227,10 @@ class _ReaderViewState extends State<_ReaderView>
     // (paused) hides it by default and only shows it on tap. There's also no
     // chrome-free experience before content is ready — the back button and
     // chapter list need to stay reachable while loading or after an error.
+    // No page view while loading or showing an error: the next one opens on
+    // the reading position as it is then.
+    if (controller.status != ReaderStatus.ready) _flipInitialIndex = null;
+
     final chromeVisible = controller.status != ReaderStatus.ready ||
         controller.isPlaying ||
         _chromeVisible;
@@ -289,6 +304,8 @@ class _ReaderViewState extends State<_ReaderView>
                         controller.layout(
                           constraints.biggest,
                           textScaler: MediaQuery.textScalerOf(context),
+                          // What the page's Text.rich inherits.
+                          ambient: DefaultTextStyle.of(context).style,
                         );
                         _ensurePageFlipController(controller);
 
@@ -309,7 +326,8 @@ class _ReaderViewState extends State<_ReaderView>
                           // +2 for the leading/trailing phantom pages that
                           // turn a swipe past the edge into a chapter change.
                           itemCount: controller.pageCount + 2,
-                          initialIndex: controller.currentPageIndex + 1,
+                          initialIndex: _flipInitialIndex ??=
+                              controller.currentPageIndex + 1,
                           config: PageFlipConfig(
                             // We drive the chrome-toggle tap ourselves and
                             // don't want the package's own edge-tap zones
@@ -386,10 +404,10 @@ class _ReaderViewState extends State<_ReaderView>
     return _PageBody(
       paragraphs: controller.paragraphs,
       page: controller.pages[index - 1],
-      // The highlight marks where playback is; in read mode nothing is
-      // playing, so no sentence should show as selected — not even the one
-      // a swipe just landed on. -1 never matches a real sentence index.
-      cursor: controller.isPlaying ? controller.cursor : -1,
+      // The highlight marks what is being read aloud; in read mode nothing
+      // is playing, so nothing should show as selected — not even the
+      // sentence a swipe just landed on.
+      highlight: controller.isPlaying ? controller.highlight : null,
       fontSize: settings.fontSize,
       lineHeight: settings.lineHeight,
       // Tapping a sentence to jump to it is a listen-mode action — in read
@@ -514,7 +532,7 @@ class _PageBody extends StatelessWidget {
   const _PageBody({
     required this.paragraphs,
     required this.page,
-    required this.cursor,
+    required this.highlight,
     required this.fontSize,
     required this.lineHeight,
     required this.onTapSentence,
@@ -522,7 +540,9 @@ class _PageBody extends StatelessWidget {
 
   final List<Paragraph> paragraphs;
   final PageRange page;
-  final int cursor;
+
+  /// Chapter text range to highlight, [start, end); null for none.
+  final (int, int)? highlight;
   final double fontSize;
   final double lineHeight;
   final void Function(Sentence)? onTapSentence;
@@ -538,15 +558,15 @@ class _PageBody extends StatelessWidget {
       children.add(_ParagraphSlice(
         key: ValueKey(visible.first.index),
         sentences: visible,
-        cursor: cursor,
+        highlight: highlight,
         fontSize: fontSize,
         lineHeight: lineHeight,
         onTapSentence: onTapSentence,
       ));
     }
 
-    // The paginator leaves headroom for measurement drift (font hinting, the
-    // highlighted sentence's bold weight), but it's an estimate, not a
+    // The paginator leaves headroom for measurement drift (font hinting),
+    // but it's an estimate, not a
     // guarantee — clip defensively so the rare miss quietly loses its last
     // sliver of text instead of visibly overflowing the page.
     // `NeverScrollableScrollPhysics` keeps this from becoming a way to
@@ -569,14 +589,14 @@ class _ParagraphSlice extends StatefulWidget {
   const _ParagraphSlice({
     super.key,
     required this.sentences,
-    required this.cursor,
+    required this.highlight,
     required this.fontSize,
     required this.lineHeight,
     required this.onTapSentence,
   });
 
   final List<Sentence> sentences;
-  final int cursor;
+  final (int, int)? highlight;
   final double fontSize;
   final double lineHeight;
   final void Function(Sentence)? onTapSentence;
@@ -650,9 +670,12 @@ class _ParagraphSliceState extends State<_ParagraphSlice> {
       height: widget.lineHeight,
       color: theme.colorScheme.onSurface,
     );
+    // Colour only, never weight: a bolder run is wider and would reflow the
+    // lines it sits on. That matters more now the highlight is a whole
+    // chunk — several sentences, possibly running on to the next page —
+    // and the pages were measured without it.
     final highlight = base.copyWith(
       color: theme.colorScheme.onPrimaryContainer,
-      fontWeight: FontWeight.w600,
       backgroundColor: theme.colorScheme.primaryContainer,
     );
 
@@ -662,21 +685,21 @@ class _ParagraphSliceState extends State<_ParagraphSlice> {
         TextSpan(
           children: [
             for (var i = 0; i < sentences.length; i++)
-              TextSpan(
-                text: _display(sentences[i], i),
-                style: sentences[i].index == widget.cursor ? highlight : base,
-                recognizer: _recognizers?[i],
-              ),
+              for (final (text, lit) in highlightParts(
+                sentences[i],
+                widget.highlight,
+                trailingSpace: i < sentences.length - 1,
+              ))
+                TextSpan(
+                  text: text,
+                  style: lit ? highlight : base,
+                  recognizer: _recognizers?[i],
+                ),
           ],
         ),
         textAlign: TextAlign.justify,
       ),
     );
-  }
-
-  String _display(Sentence s, int i) {
-    if (s.text.isEmpty) return '';
-    return i == widget.sentences.length - 1 ? s.text : '${s.text} ';
   }
 }
 
@@ -762,4 +785,31 @@ class _EntitlementPrompt extends StatelessWidget {
       ],
     );
   }
+}
+
+/// [sentence] as shown on the page, split into the pieces inside and outside
+/// [highlight] (a chapter range): the range being read needn't start or end
+/// on a sentence boundary. [trailingSpace] adds the space between it and the
+/// next sentence, lit only when the highlight carries on past it, so a lit
+/// stretch reads as one band.
+@visibleForTesting
+List<(String, bool)> highlightParts(
+  Sentence sentence,
+  (int, int)? highlight, {
+  required bool trailingSpace,
+}) {
+  final text = sentence.text;
+  if (text.isEmpty) return const [];
+  final space = trailingSpace ? ' ' : '';
+  final lit = highlight == null ? null : sentence.overlap(highlight.$1, highlight.$2);
+  if (lit == null) return [('$text$space', false)];
+
+  final (from, to) = lit;
+  final litSpace = to == text.length && highlight!.$2 > sentence.textEnd;
+  return [
+    if (from > 0) (text.substring(0, from), false),
+    (text.substring(from, to) + (litSpace ? space : ''), true),
+    if (to < text.length) (text.substring(to) + space, false)
+    else if (!litSpace && space.isNotEmpty) (space, false),
+  ];
 }

@@ -36,20 +36,27 @@ class _ChapterData {
   final List<Sentence> sentences;
 }
 
-/// One chapter in the player's playlist: its text, its narration, and which
-/// sentence each timeline chunk starts in.
+/// One chapter in the player's playlist: its text and its narration.
 class _QueuedChapter {
-  _QueuedChapter(this.chapter, this.audio)
-      : _chunkSentences =
-            chunkSentenceIndices(audio.timeline, chapter.sentences);
+  _QueuedChapter(this.chapter, this.audio);
 
   final _ChapterData chapter;
   final ChapterAudio audio;
-  final List<int> _chunkSentences;
 
-  /// The sentence being read at [position] into this chapter's audio.
-  int sentenceAt(Duration position) =>
-      _chunkSentences[chunkIndexAt(audio.timeline, position.inMilliseconds)];
+  /// What is being read at [position] into this chapter's audio: the
+  /// timeline chunk, and the sentence the narration has got to within it.
+  ///
+  /// The timeline only says when each chunk starts, so the place inside a
+  /// chunk is estimated from how much of the chunk's time has gone by. That
+  /// is what turns the page in time when a chunk runs on from one page to
+  /// the next.
+  ({int chunk, int sentence}) readingAt(Duration position) {
+    final ms = position.inMilliseconds;
+    final chunk = chunkIndexAt(audio.timeline, ms);
+    final offset =
+        estimatedReadingOffset(audio.timeline, chunk, ms, audio.durationMs);
+    return (chunk: chunk, sentence: sentenceAtOffset(chapter.sentences, offset));
+  }
 
   /// Where in the audio [sentence] starts being read.
   Duration startOf(int sentence) => Duration(
@@ -121,6 +128,7 @@ class ReaderController extends ChangeNotifier {
   double? _paginatedFontSize;
   double? _paginatedLineHeight;
   TextScaler _paginatedTextScaler = TextScaler.noScaling;
+  TextStyle _paginatedAmbient = const TextStyle();
 
   int _cursor = 0;
   bool _playing = false;
@@ -132,6 +140,13 @@ class ReaderController extends ChangeNotifier {
 
   /// Last position queued for the server, as (chapter, sentence).
   (int, int)? _lastQueued;
+
+  /// Chapter text range being read aloud, [start, end) — a timeline chunk,
+  /// which can cover several sentences, or only part of one.
+  (int, int)? _highlight;
+
+  /// Timeline chunk the highlight was last moved to.
+  int _highlightChunk = -1;
   late final List<StreamSubscription<Object?>> _subs;
 
   /// The playlist, index for index with the player's.
@@ -175,6 +190,9 @@ class ReaderController extends ChangeNotifier {
   List<Paragraph> get paragraphs => _paragraphs;
   List<Sentence> get sentences => _sentences;
   int get cursor => _cursor;
+
+  /// What to highlight while listening: the chapter text range being read.
+  (int, int)? get highlight => _highlight;
 
   List<PageRange> get pages => _pages;
   int get pageCount => _pages.length;
@@ -240,14 +258,24 @@ class ReaderController extends ChangeNotifier {
   /// text and the device's current text scaling. Repaginates only when one
   /// of those — or the open chapter — actually changed, so most calls are
   /// free.
-  void layout(Size size, {TextScaler textScaler = TextScaler.noScaling}) {
+  ///
+  /// [ambient] is the text style the page inherits (`DefaultTextStyle`):
+  /// the rendered text picks up its font and letter spacing on top of the
+  /// reader's size and line height, so measuring without it under-counts
+  /// lines and the bottom of a page gets cut off.
+  void layout(
+    Size size, {
+    TextScaler textScaler = TextScaler.noScaling,
+    TextStyle ambient = const TextStyle(),
+  }) {
     final fontSize = _settings.fontSize;
     final lineHeight = _settings.lineHeight;
     if (_lastLayoutSize == size &&
         _pagesForChapter == _chapterIndex &&
         _paginatedFontSize == fontSize &&
         _paginatedLineHeight == lineHeight &&
-        _paginatedTextScaler == textScaler) {
+        _paginatedTextScaler == textScaler &&
+        _paginatedAmbient == ambient) {
       return;
     }
     _lastLayoutSize = size;
@@ -255,17 +283,18 @@ class ReaderController extends ChangeNotifier {
     _paginatedFontSize = fontSize;
     _paginatedLineHeight = lineHeight;
     _paginatedTextScaler = textScaler;
-    _repaginate(size, textScaler);
+    _paginatedAmbient = ambient;
+    _repaginate(size, textScaler, ambient);
   }
 
-  void _repaginate(Size size, TextScaler textScaler) {
+  void _repaginate(Size size, TextScaler textScaler, TextStyle ambient) {
     _pages = paginate(
       paragraphs: _paragraphs,
       pageSize: size,
-      style: TextStyle(
+      style: ambient.merge(TextStyle(
         fontSize: _settings.fontSize,
         height: _settings.lineHeight,
-      ),
+      )),
       textScaler: textScaler,
     );
     if (_pages.isEmpty) {
@@ -372,6 +401,9 @@ class ReaderController extends ChangeNotifier {
     // Same index can still mean new text (the server's copy changed), so
     // always repaginate on the next layout.
     _pagesForChapter = -1;
+    // Ranges into the old text mean nothing in the new one.
+    _highlight = null;
+    _highlightChunk = -1;
   }
 
   /// Re-attempts loading the chapter that just failed to unlock — call after
@@ -391,7 +423,9 @@ class ReaderController extends ChangeNotifier {
     // Font size/line height change how much text fits on a page; repaginate
     // with whatever size and text scale the reader last reported.
     final size = _lastLayoutSize;
-    if (size != null) layout(size, textScaler: _paginatedTextScaler);
+    if (size != null) {
+      layout(size, textScaler: _paginatedTextScaler, ambient: _paginatedAmbient);
+    }
   }
 
   Future<void> openChapter(int index, {bool atEnd = false}) async {
@@ -428,7 +462,7 @@ class ReaderController extends ChangeNotifier {
     if (item != null &&
         item.chapter.index == _chapterIndex &&
         item.audio.isFresh()) {
-      if (item.sentenceAt(_player.position) != _cursor) {
+      if (item.readingAt(_player.position).sentence != _cursor) {
         await _player.seek(item.startOf(_cursor));
       }
       unawaited(_player.play());
@@ -607,15 +641,27 @@ class ReaderController extends ChangeNotifier {
   /// page) to wherever the player is.
   void _syncCursor() {
     final item = _currentItem;
-    if (item == null || _disposed) return;
-    final sentence = item.sentenceAt(_player.position);
+    // Only while listening. The player re-reports its index when it pauses
+    // — which is exactly what a hand-swipe during playback does — and
+    // following it then dragged the reader straight back from the page just
+    // swiped to. play() picks the reading position up again from there.
+    if (item == null || _disposed || !_playing) return;
+    // While a source is still loading the player reports position zero, not
+    // the start position it was given — following that would flash the
+    // chapter's first page every time playback starts mid-chapter.
+    final state = _player.processingState;
+    if (state == ProcessingState.idle || state == ProcessingState.loading) return;
+    final (:chunk, :sentence) = item.readingAt(_player.position);
     final newChapter = item.chapter.index != _chapterIndex ||
         !identical(item.chapter.text, _chapterText);
-    if (!newChapter && sentence == _cursor) return;
+    if (!newChapter && sentence == _cursor && chunk == _highlightChunk) return;
     if (newChapter) {
       _show(item.chapter);
       _status = ReaderStatus.ready;
     }
+    final read = item.audio.timeline[chunk];
+    _highlight = (read.startOffset, read.endOffset);
+    _highlightChunk = chunk;
     _cursor = sentence;
     _retriedFailure = false;
     _safeNotify();
@@ -736,6 +782,10 @@ class ReaderController extends ChangeNotifier {
   Future<void> jumpTo(int sentenceIndex) async {
     if (_sentences.isEmpty) return;
     _cursor = sentenceIndex.clamp(0, _sentences.length - 1);
+    // Until the player reports from its new position.
+    final target = _sentences[_cursor];
+    _highlight = (target.textStart, target.textEnd);
+    _highlightChunk = -1;
     _safeNotify();
     highlightTick.value++;
     _saveProgressNow();
@@ -832,31 +882,43 @@ int chunkIndexAt(List<TimelineChunk> chunks, int ms) {
   return lo;
 }
 
-/// For each chunk, the sentence its text starts in. Sentence spans tile the
+/// The sentence holding chapter offset [offset]. Sentence spans tile the
 /// chapter text (see `segment`), so every offset falls in exactly one.
 @visibleForTesting
-List<int> chunkSentenceIndices(
+int sentenceAtOffset(List<Sentence> sentences, int offset) {
+  if (sentences.isEmpty) return 0;
+  // First sentence that ends after the offset.
+  var lo = 0;
+  var hi = sentences.length - 1;
+  while (lo < hi) {
+    final mid = (lo + hi) >> 1;
+    if (sentences[mid].end <= offset) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
+/// Roughly where in chunk [index]'s text the narration is at [ms]: the
+/// share of the chunk's time gone by, applied to its text. The chunk lasts
+/// until the next one starts, or until [durationMs] for the last one.
+@visibleForTesting
+int estimatedReadingOffset(
   List<TimelineChunk> chunks,
-  List<Sentence> sentences,
+  int index,
+  int ms,
+  int durationMs,
 ) {
-  if (sentences.isEmpty) return List.filled(chunks.length, 0);
-  return [
-    for (final chunk in chunks)
-      () {
-        // First sentence that ends after the chunk's start.
-        var lo = 0;
-        var hi = sentences.length - 1;
-        while (lo < hi) {
-          final mid = (lo + hi) >> 1;
-          if (sentences[mid].end <= chunk.startOffset) {
-            lo = mid + 1;
-          } else {
-            hi = mid;
-          }
-        }
-        return lo;
-      }(),
-  ];
+  final chunk = chunks[index];
+  final endMs = index + 1 < chunks.length ? chunks[index + 1].timeMs : durationMs;
+  final span = endMs - chunk.timeMs;
+  if (span <= 0 || chunk.endOffset <= chunk.startOffset) return chunk.startOffset;
+  final fraction = ((ms - chunk.timeMs) / span).clamp(0.0, 1.0);
+  // Stay inside the chunk: its very last offset still belongs to it.
+  final length = chunk.endOffset - chunk.startOffset;
+  return chunk.startOffset + (fraction * (length - 1)).floor();
 }
 
 /// Where in the audio [sentence] starts being read: the first chunk that

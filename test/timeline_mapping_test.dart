@@ -1,6 +1,7 @@
 import 'package:audio_book/models/chapter_audio.dart';
 import 'package:audio_book/services/text_parser.dart';
 import 'package:audio_book/state/reader_controller.dart';
+import 'package:audio_book/ui/reader_screen.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 TimelineChunk _chunk(int timeMs, int start, int end) =>
@@ -36,13 +37,78 @@ void main() {
     });
   });
 
-  group('chunkSentenceIndices', () {
-    test('maps each chunk to the sentence its text starts in', () {
-      expect(chunkSentenceIndices(chunks, sentences), [
-        sentenceOf('Câu một.'),
+  group('sentenceAtOffset', () {
+    test('finds the sentence holding an offset', () {
+      expect(sentenceAtOffset(sentences, startOf('Câu một.')), sentenceOf('Câu một.'));
+      expect(sentenceAtOffset(sentences, startOf('hai')), sentenceOf('Câu hai.'));
+      expect(sentenceAtOffset(sentences, startOf('Câu ba.')), sentenceOf('Câu ba.'));
+    });
+  });
+
+  group('estimatedReadingOffset', () {
+    // One chunk reading both "Câu một." and "Câu hai." from 0 to 2000 ms.
+    final wide = [
+      _chunk(0, startOf('Câu một.'), endOf('Câu hai.')),
+      _chunk(2000, startOf('Câu ba.'), endOf('Câu ba.')),
+    ];
+
+    test('moves through the chunk with the time gone by', () {
+      expect(estimatedReadingOffset(wide, 0, 0, 3000), startOf('Câu một.'));
+      final halfway = estimatedReadingOffset(wide, 0, 1000, 3000);
+      expect(halfway, greaterThan(startOf('Câu một.')));
+      expect(halfway, lessThan(endOf('Câu hai.')));
+      // Late in the chunk the narration has reached the second sentence —
+      // which may be on the next page.
+      expect(
+        sentenceAtOffset(sentences, estimatedReadingOffset(wide, 0, 1900, 3000)),
         sentenceOf('Câu hai.'),
-        sentenceOf('Câu ba.'),
-      ]);
+      );
+    });
+
+    test('never leaves the chunk', () {
+      expect(estimatedReadingOffset(wide, 0, 999999, 3000), endOf('Câu hai.') - 1);
+      expect(estimatedReadingOffset(wide, 0, -5, 3000), startOf('Câu một.'));
+    });
+
+    test('the last chunk runs until the end of the audio', () {
+      final last = estimatedReadingOffset(wide, 1, 2500, 3000);
+      expect(last, greaterThan(startOf('Câu ba.')));
+      expect(last, lessThan(endOf('Câu ba.')));
+    });
+  });
+
+  group('highlightParts', () {
+    String lit(List<(String, bool)> parts) =>
+        parts.where((p) => p.$2).map((p) => p.$1).join();
+    String all(List<(String, bool)> parts) => parts.map((p) => p.$1).join();
+
+    final one = sentences[sentenceOf('Câu một.')];
+    final two = sentences[sentenceOf('Câu hai.')];
+
+    test('a chunk covering several sentences lights all of them', () {
+      final range = (startOf('Câu một.'), endOf('Câu hai.'));
+      expect(lit(highlightParts(one, range, trailingSpace: true)), 'Câu một. ');
+      expect(lit(highlightParts(two, range, trailingSpace: false)), 'Câu hai.');
+    });
+
+    test('a chunk ending mid-sentence lights only its part', () {
+      final range = (startOf('Câu hai.'), startOf('hai.'));
+      final parts = highlightParts(two, range, trailingSpace: true);
+      expect(lit(parts), 'Câu ');
+      expect(all(parts), 'Câu hai. ', reason: 'the text itself is unchanged');
+    });
+
+    test('the space after a sentence stays unlit where the chunk stops', () {
+      final range = (startOf('Câu một.'), endOf('Câu một.'));
+      final parts = highlightParts(one, range, trailingSpace: true);
+      expect(lit(parts), 'Câu một.');
+      expect(all(parts), 'Câu một. ');
+    });
+
+    test('no highlight, or one elsewhere, leaves the sentence plain', () {
+      expect(highlightParts(one, null, trailingSpace: true), [('Câu một. ', false)]);
+      final elsewhere = (startOf('Câu ba.'), endOf('Câu ba.'));
+      expect(lit(highlightParts(one, elsewhere, trailingSpace: true)), isEmpty);
     });
   });
 

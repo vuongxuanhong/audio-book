@@ -27,12 +27,14 @@ List<Paragraph> segment(String text) {
     final end = hasNewline ? lineEnd + 1 : lineEnd;
     final spans = <Sentence>[];
     for (final range in _sentenceRanges(text, cursor, end)) {
+      final raw = text.substring(range.$1, range.$2);
       spans.add(Sentence(
         index: sentenceIndex++,
         paragraphIndex: paragraphIndex,
         start: range.$1,
         end: range.$2,
-        text: text.substring(range.$1, range.$2).trim(),
+        text: raw.trim(),
+        textStart: range.$1 + raw.length - raw.trimLeft().length,
         startsSentence: range.$3,
       ));
     }

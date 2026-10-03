@@ -8,6 +8,7 @@ class Sentence {
     required this.start,
     required this.end,
     required this.text,
+    required this.textStart,
     this.startsSentence = true,
   });
 
@@ -16,8 +17,25 @@ class Sentence {
   final int start;
   final int end;
 
-  /// Trimmed text handed to the TTS engine. Empty for whitespace-only spans.
+  /// The span's text with surrounding whitespace trimmed — what the reader
+  /// shows. Empty for whitespace-only spans.
   final String text;
+
+  /// Where [text] starts in the chapter: [start] plus the whitespace trimmed
+  /// off the front.
+  final int textStart;
+
+  int get textEnd => textStart + text.length;
+
+  /// The part of [text] inside the chapter range [rangeStart, rangeEnd), as
+  /// offsets into [text]; null when they don't overlap. Lets the reader
+  /// highlight exactly the stretch being read, which needn't line up with
+  /// sentence boundaries.
+  (int, int)? overlap(int rangeStart, int rangeEnd) {
+    final from = (rangeStart > textStart ? rangeStart : textStart) - textStart;
+    final to = (rangeEnd < textEnd ? rangeEnd : textEnd) - textStart;
+    return from < to ? (from, to) : null;
+  }
 
   /// Letters or digits — anything the model can actually pronounce.
   static final RegExp _voiced = RegExp(r'[\p{L}\p{N}]', unicode: true);
