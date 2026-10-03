@@ -7,8 +7,6 @@
 .buildlog/
 .history
 
-
-
 # Flutter repo-specific
 /bin/cache/
 /bin/internal/bootstrap.bat
@@ -125,3 +123,6 @@ app.*.symbols
 
 # macOS
 .DS_Store
+
+# FVM Version Cache
+.fvm/

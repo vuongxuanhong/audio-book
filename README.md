@@ -21,16 +21,19 @@ còn chạy model TTS trên máy.
 
 ## Chạy thử
 
+Phiên bản Flutter được ghim trong `.fvmrc` (dùng [fvm](https://fvm.app)):
+
 ```bash
-flutter pub get
-flutter run          # iOS / Android
+fvm install          # cài đúng bản trong .fvmrc
+fvm flutter pub get
+fvm flutter run      # iOS / Android
 ```
 
 Mặc định app gọi backend trên Railway. Chạy với backend local
 (`docker compose up` trong `audiobook-backend`):
 
 ```bash
-flutter run --dart-define=API_BASE_URL=http://localhost:8000
+fvm flutter run --dart-define=API_BASE_URL=http://localhost:8000
 ```
 
 Audio được stream từ `AUDIO_BASE_URL` mà backend ký vào URL (mặc định
