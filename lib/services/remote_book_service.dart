@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 
+import '../models/chapter_audio.dart';
 import 'api_client.dart';
 
 class RemoteChapterRef {
@@ -9,6 +10,7 @@ class RemoteChapterRef {
     required this.title,
     required this.charCount,
     required this.isFree,
+    required this.hasAudio,
   });
 
   final String id;
@@ -17,12 +19,17 @@ class RemoteChapterRef {
   final int charCount;
   final bool isFree;
 
+  /// The book detail lists audio metadata for every narrated chapter, locked
+  /// or not; only the signed URL is withheld from callers who can't play it.
+  final bool hasAudio;
+
   factory RemoteChapterRef.fromJson(Map<String, dynamic> json) => RemoteChapterRef(
         id: json['id'] as String,
         index: json['index'] as int,
         title: json['title'] as String,
         charCount: json['char_count'] as int,
         isFree: json['is_free'] as bool,
+        hasAudio: json['audio'] != null,
       );
 }
 
@@ -112,10 +119,17 @@ class RemoteBookService {
     return RemoteBookMeta.fromJson(response.data as Map<String, dynamic>);
   }
 
-  Future<String> fetchChapterText(String bookId, String chapterId) async {
+  /// The chapter's text plus, when it has narration, a freshly signed audio
+  /// URL and its highlight timeline — also what to call again once that URL
+  /// has expired.
+  Future<RemoteChapterContent> fetchChapter(String bookId, String chapterId) async {
     try {
       final response = await _dio.get('/v1/books/$bookId/chapters/$chapterId');
-      return response.data['content'] as String;
+      final body = response.data as Map<String, dynamic>;
+      return RemoteChapterContent(
+        content: body['content'] as String,
+        audio: ChapterAudio.tryParse(body['audio'] as Map<String, dynamic>?),
+      );
     } on DioException catch (e) {
       final status = e.response?.statusCode;
       if (status == 401) throw LoginRequiredException();

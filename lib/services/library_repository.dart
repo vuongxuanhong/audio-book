@@ -7,6 +7,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../models/book.dart';
+import '../models/chapter_audio.dart';
 import '../models/reading_progress.dart';
 import 'epub_importer.dart';
 import 'remote_book_service.dart';
@@ -33,6 +34,11 @@ class LibraryRepository {
 
   Directory? _root;
   SecretKey? _cacheKey;
+
+  /// Last chapter response per remote chapter id, reused while its signed
+  /// audio URL is still fresh — seeking around or pausing and resuming must
+  /// not cost a rate-limited API call each time.
+  final Map<String, RemoteChapterContent> _remoteChapters = {};
 
   Future<Directory> _booksDir() async {
     if (_root != null) return _root!;
@@ -95,6 +101,7 @@ class LibraryRepository {
           charCount: c.charCount,
           remoteChapterId: c.id,
           isFree: c.isFree,
+          hasAudio: c.hasAudio,
         ),
     ];
 
@@ -107,6 +114,28 @@ class LibraryRepository {
       remoteId: meta.id,
     );
     File('${dir.path}/book.json').writeAsStringSync(book.encode());
+    return book;
+  }
+
+  /// Re-reads which of a remote book's chapters have narration — audio gets
+  /// attached on the backend after a book is already in the library — and
+  /// saves the result. Throws when the book detail can't be fetched.
+  Future<Book> refreshAudioAvailability(Book book) async {
+    final remote = _remote;
+    if (remote == null || !book.isRemote) return book;
+    final meta = await remote.fetchBookMeta(book.remoteId!);
+    final hasAudio = {for (final c in meta.chapters) c.id: c.hasAudio};
+    return saveBook(book.copyWith(chapters: [
+      for (final c in book.chapters)
+        c.copyWith(hasAudio: hasAudio[c.remoteChapterId]),
+    ]));
+  }
+
+  Future<Book> saveBook(Book book) async {
+    final dir = Directory('${(await _booksDir()).path}/${book.id}');
+    if (dir.existsSync()) {
+      File('${dir.path}/book.json').writeAsStringSync(book.encode());
+    }
     return book;
   }
 
@@ -156,9 +185,38 @@ class LibraryRepository {
     if (remote == null) {
       throw StateError('No remote service configured for a remote book');
     }
-    final text = await remote.fetchChapterText(book.remoteId!, ref.remoteChapterId!);
-    await _cacheEncrypted(file, text);
-    return text;
+    return (await fetchRemoteChapter(book, chapterIndex)).content;
+  }
+
+  /// A remote chapter straight from the API: its text plus, if it has been
+  /// narrated, a signed audio URL and the highlight timeline for that text.
+  /// Also refreshes the on-disk text cache, so the text on screen and the
+  /// timeline's offsets always come from the same response.
+  ///
+  /// Throws [LoginRequiredException] / [EntitlementRequiredException] for a
+  /// locked chapter, like [loadChapterText].
+  Future<RemoteChapterContent> fetchRemoteChapter(
+    Book book,
+    int chapterIndex, {
+    bool forceRefresh = false,
+  }) async {
+    final ref = book.chapters[chapterIndex];
+    final chapterId = ref.remoteChapterId;
+    final remote = _remote;
+    if (chapterId == null || remote == null) {
+      throw StateError('No remote service configured for a remote book');
+    }
+
+    final cached = _remoteChapters[chapterId];
+    if (!forceRefresh && cached != null && cached.audio?.isFresh() == true) {
+      return cached;
+    }
+
+    final fresh = await remote.fetchChapter(book.remoteId!, chapterId);
+    _remoteChapters[chapterId] = fresh;
+    final dir = await _booksDir();
+    await _cacheEncrypted(File('${dir.path}/${book.id}/${ref.fileName}'), fresh.content);
+    return fresh;
   }
 
   /// Best-effort: push the reading position for a remote book up to the

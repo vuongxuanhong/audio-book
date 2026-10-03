@@ -12,12 +12,11 @@ import '../services/library_repository.dart';
 import '../services/paginator.dart';
 import '../services/screen_security.dart';
 import '../services/settings_store.dart';
-import '../services/voice_repository.dart';
 import '../state/app_settings.dart';
 import '../state/reader_controller.dart';
-import 'voice_screen.dart';
 import 'widgets/chapter_list.dart';
 import 'widgets/player_bar.dart';
+import 'widgets/sign_in_buttons.dart';
 
 class ReaderScreen extends StatelessWidget {
   const ReaderScreen({super.key, required this.book});
@@ -30,7 +29,6 @@ class ReaderScreen extends StatelessWidget {
       create: (_) => ReaderController(
         book: book,
         library: context.read<LibraryRepository>(),
-        voices: context.read<VoiceRepository>(),
         store: context.read<SettingsStore>(),
         settings: context.read<AppSettings>(),
       ),
@@ -226,18 +224,17 @@ class _ReaderViewState extends State<_ReaderView>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (controller.voiceMissing) _VoiceBanner(controller: controller),
                 // A locked chapter already gets its own full-screen prompt
                 // (with the right actions — sign in, or an explanation) below;
-                // this generic banner's "Thử lại" is for the voice-loading
-                // error path (`reloadVoice`), which doesn't apply here.
-                if (controller.error != null && controller.lockReason == null)
+                // this banner is for playback errors on a readable chapter.
+                if (controller.error != null &&
+                    controller.status == ReaderStatus.ready)
                   MaterialBanner(
                     content: Text(controller.error!),
                     actions: [
                       TextButton(
-                        onPressed: controller.reloadVoice,
-                        child: const Text('Thử lại'),
+                        onPressed: controller.dismissError,
+                        child: const Text('Đóng'),
                       ),
                     ],
                   ),
@@ -345,7 +342,7 @@ class _ReaderViewState extends State<_ReaderView>
                     '${controller.chapter.title} · '
                     '${(controller.chapterFraction * 100).round()}%',
                     textAlign: TextAlign.center,
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
@@ -675,33 +672,6 @@ class _ParagraphSliceState extends State<_ParagraphSlice> {
   }
 }
 
-class _VoiceBanner extends StatelessWidget {
-  const _VoiceBanner({required this.controller});
-
-  final ReaderController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialBanner(
-      leading: const Icon(Icons.download_outlined),
-      content: const Text(
-        'Chưa có giọng đọc offline. Tải một gói giọng để nghe truyện.',
-      ),
-      actions: [
-        TextButton(
-          onPressed: () async {
-            await Navigator.of(context).push(
-              MaterialPageRoute<void>(builder: (_) => const VoiceScreen()),
-            );
-            await controller.reloadVoice();
-          },
-          child: const Text('Tải giọng đọc'),
-        ),
-      ],
-    );
-  }
-}
-
 /// Shown in place of a locked chapter's content when the device hasn't
 /// linked to a user yet — sign-in unlocks whichever entitlements that
 /// account has, then the chapter is reloaded automatically.
@@ -748,17 +718,11 @@ class _LoginPromptState extends State<_LoginPrompt> {
         if (_busy)
           const CircularProgressIndicator()
         else ...[
-          FilledButton.icon(
-            onPressed: () => _signIn(auth.signInWithGoogle),
-            icon: const Icon(Icons.login),
-            label: const Text('Đăng nhập với Google'),
-          ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: () => _signIn(auth.signInWithApple),
-            icon: const Icon(Icons.apple),
-            label: const Text('Đăng nhập với Apple'),
-          ),
+          if (showAppleSignIn) ...[
+            AppleSignInButton(onPressed: () => _signIn(auth.signInWithApple)),
+            const SizedBox(height: 12),
+          ],
+          GoogleSignInButton(onPressed: () => _signIn(auth.signInWithGoogle)),
         ],
         if (_error != null) ...[
           const SizedBox(height: 12),

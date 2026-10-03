@@ -46,12 +46,14 @@ class ApiClient {
     );
 
     // Debug-only request/response logging, including headers (so the bearer
-    // token shows up too) — added after the auth interceptor so it sees the
-    // Authorization header once that's attached. Debug builds only.
+    // token shows up too) and response bodies — added after the auth
+    // interceptor so it sees the Authorization header once that's attached.
+    // Debug builds only.
     if (kDebugMode) {
       _dio.interceptors.add(LogInterceptor(
         requestHeader: true,
         responseHeader: true,
+        responseBody: true,
         logPrint: (obj) => debugPrint('[api] $obj'),
       ));
     }

@@ -16,8 +16,10 @@ class PlayerBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final controller = context.watch<ReaderController>();
     final theme = Theme.of(context);
-    final enabled =
-        controller.status == ReaderStatus.ready && !controller.voiceMissing;
+    // Pause must keep working even if the chapter on screen turns out to
+    // have no narration while something is still playing.
+    final enabled = controller.status == ReaderStatus.ready &&
+        (controller.canListen || controller.isPlaying);
 
     return Material(
       elevation: 8,
@@ -48,7 +50,7 @@ class PlayerBar extends StatelessWidget {
                         '${controller.chapter.title} · '
                         '${(controller.chapterFraction * 100).round()}%',
                         textAlign: TextAlign.center,
-                        maxLines: 1,
+                        maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.bodyMedium,
                       ),
@@ -74,6 +76,12 @@ class _PlayButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // Only explained once the chapter is open; while it loads there's
+    // nothing to say yet.
+    final reason = controller.status == ReaderStatus.ready
+        ? controller.listenUnavailableReason
+        : null;
     return SizedBox(
       width: 56,
       height: 56,
@@ -89,7 +97,20 @@ class _PlayButton extends StatelessWidget {
           FloatingActionButton(
             heroTag: 'reader-play',
             elevation: 0,
-            onPressed: enabled ? controller.toggle : null,
+            // Looks disabled when there's nothing to listen to, but still
+            // answers a tap with why — a truly disabled button just ignores
+            // it, and a tooltip only shows on long press.
+            backgroundColor:
+                enabled ? null : scheme.onSurface.withValues(alpha: 0.12),
+            foregroundColor:
+                enabled ? null : scheme.onSurface.withValues(alpha: 0.38),
+            onPressed: enabled
+                ? controller.toggle
+                : reason == null
+                    ? null
+                    : () => ScaffoldMessenger.of(context)
+                      ..hideCurrentSnackBar()
+                      ..showSnackBar(SnackBar(content: Text(reason))),
             child: Icon(controller.isPlaying ? Icons.pause : Icons.play_arrow),
           ),
         ],

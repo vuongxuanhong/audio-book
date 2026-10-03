@@ -10,6 +10,7 @@ class ChapterRef {
     required this.charCount,
     this.remoteChapterId,
     this.isFree = true,
+    this.hasAudio,
   });
 
   final int index;
@@ -26,6 +27,21 @@ class ChapterRef {
   /// Always true for locally-imported chapters.
   final bool isFree;
 
+  /// Whether the backend has narration for this chapter. Null when not known
+  /// yet — always for a local import, and for a remote book added before
+  /// this was tracked, until the reader refreshes it.
+  final bool? hasAudio;
+
+  ChapterRef copyWith({bool? hasAudio}) => ChapterRef(
+        index: index,
+        title: title,
+        fileName: fileName,
+        charCount: charCount,
+        remoteChapterId: remoteChapterId,
+        isFree: isFree,
+        hasAudio: hasAudio ?? this.hasAudio,
+      );
+
   factory ChapterRef.fromJson(Map<String, dynamic> json) => ChapterRef(
         index: json['index'] as int,
         title: json['title'] as String,
@@ -33,6 +49,7 @@ class ChapterRef {
         charCount: json['charCount'] as int? ?? 0,
         remoteChapterId: json['remoteChapterId'] as String?,
         isFree: json['isFree'] as bool? ?? true,
+        hasAudio: json['hasAudio'] as bool?,
       );
 
   Map<String, dynamic> toJson() => {
@@ -42,6 +59,7 @@ class ChapterRef {
         'charCount': charCount,
         if (remoteChapterId != null) 'remoteChapterId': remoteChapterId,
         'isFree': isFree,
+        if (hasAudio != null) 'hasAudio': hasAudio,
       };
 }
 
@@ -74,12 +92,12 @@ class Book {
   int get totalChars =>
       chapters.fold<int>(0, (sum, c) => sum + c.charCount);
 
-  Book copyWith({String? title, String? author}) => Book(
+  Book copyWith({String? title, String? author, List<ChapterRef>? chapters}) => Book(
         id: id,
         title: title ?? this.title,
         author: author ?? this.author,
         importedAt: importedAt,
-        chapters: chapters,
+        chapters: chapters ?? this.chapters,
         remoteId: remoteId,
       );
 

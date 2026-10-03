@@ -7,6 +7,7 @@ import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 
 import '../models/book.dart';
+import '../models/chapter_audio.dart';
 import '../models/reading_progress.dart';
 import '../models/sentence.dart';
 import '../services/library_repository.dart';
@@ -16,8 +17,6 @@ import '../services/remote_book_service.dart'
     show EntitlementRequiredException, LoginRequiredException;
 import '../services/settings_store.dart';
 import '../services/text_parser.dart' as parser;
-import '../services/tts_engine.dart';
-import '../services/voice_repository.dart';
 import 'app_settings.dart';
 
 enum ReaderStatus { loading, ready, error }
@@ -37,57 +36,74 @@ class _ChapterData {
   final List<Sentence> sentences;
 }
 
-/// One line in the player's playlist, by position in the book.
-class _QueuedLine {
-  const _QueuedLine(this.chapter, this.sentence);
+/// One chapter in the player's playlist: its text, its narration, and which
+/// sentence each timeline chunk starts in.
+class _QueuedChapter {
+  _QueuedChapter(this.chapter, this.audio)
+      : _chunkSentences =
+            chunkSentenceIndices(audio.timeline, chapter.sentences);
 
   final _ChapterData chapter;
-  final int sentence;
+  final ChapterAudio audio;
+  final List<int> _chunkSentences;
+
+  /// The sentence being read at [position] into this chapter's audio.
+  int sentenceAt(Duration position) =>
+      _chunkSentences[chunkIndexAt(audio.timeline, position.inMilliseconds)];
+
+  /// Where in the audio [sentence] starts being read.
+  Duration startOf(int sentence) => Duration(
+        milliseconds: sentenceStartMs(
+          audio.timeline,
+          chapter.sentences[sentence.clamp(0, chapter.sentences.length - 1)],
+        ),
+      );
 }
 
 /// Drives one open book: which chapter is on screen, which sentence is being
-/// spoken, and the synthesize-ahead queue that keeps playback gapless.
+/// read aloud, and the playlist of narrated chapters streamed from the
+/// backend's audio server.
 ///
-/// Playback is a playlist rather than one clip at a time: lines are
-/// synthesized a few ahead and appended, each with its pause baked in, so the
-/// player never goes idle between lines. That is what lets listening carry on
-/// with the screen off — an idle player in the background gets the app
-/// suspended on iOS. The lock-screen controls and the Android foreground
-/// service come from just_audio_background and only exist while there is
-/// something in the playlist, so reading without listening runs nothing in
-/// the background.
+/// Each chapter is one audio file with a timeline that says which span of
+/// the chapter text is being read when; the player's position is mapped
+/// through it to the highlighted sentence. The playlist keeps the next
+/// chapter queued behind the one playing, so listening runs on from chapter
+/// to chapter without the player ever going idle — an idle player in the
+/// background gets the app suspended on iOS. The lock-screen controls and
+/// the Android foreground service come from just_audio_background and only
+/// exist while there is something in the playlist, so reading without
+/// listening runs nothing in the background.
 class ReaderController extends ChangeNotifier {
   ReaderController({
     required Book book,
     required LibraryRepository library,
-    required VoiceRepository voices,
     required SettingsStore store,
     required AppSettings settings,
   })  : _book = book,
         _library = library,
-        _voices = voices,
         _store = store,
         _settings = settings {
     _settings.addListener(_onSettingsChanged);
     _subs = [
       _player.currentIndexStream.listen(_onPlayerIndex),
       _player.playerStateStream.listen(_onPlayerState),
-      _player.playbackEventStream.listen(null, onError: _onPlayerError),
+      _player
+          .createPositionStream(
+            minPeriod: const Duration(milliseconds: 100),
+            maxPeriod: const Duration(milliseconds: 250),
+          )
+          .listen(_onPosition),
+      _player.playbackEventStream
+          .listen(null, onError: (Object e, StackTrace _) => _onPlaybackFailure(e)),
     ];
     _init();
   }
 
-  /// Lines synthesized and queued ahead of the one playing. Synthesis runs
-  /// several times faster than speech, so a few lines cover a slow sentence.
-  static const _lookahead = 3;
-
-  final Book _book;
+  Book _book;
   final LibraryRepository _library;
-  final VoiceRepository _voices;
   final SettingsStore _store;
   final AppSettings _settings;
 
-  final TtsEngine _engine = TtsEngine();
   final AudioPlayer _player = AudioPlayer();
 
   ReaderStatus _status = ReaderStatus.loading;
@@ -109,7 +125,6 @@ class ReaderController extends ChangeNotifier {
   int _cursor = 0;
   bool _playing = false;
   bool _buffering = false;
-  bool _voiceMissing = false;
   bool _disposed = false;
 
   int _session = 0;
@@ -117,43 +132,32 @@ class ReaderController extends ChangeNotifier {
   late final List<StreamSubscription<Object?>> _subs;
 
   /// The playlist, index for index with the player's.
-  final List<_QueuedLine> _queue = [];
+  final List<_QueuedChapter> _queue = [];
 
-  /// Where the producer will pick up next — may be chapters ahead of the one
-  /// on screen.
-  _ChapterData? _prodChapter;
-  int _prodCursor = 0;
+  /// Session whose [_extendQueue] is in flight, so it never runs twice.
+  int? _extendingSession;
 
-  /// Set once the producer has queued the book's last line, or hit a chapter
-  /// it can't open ([_prodBlockedChapter]).
-  bool _prodDone = false;
-  int? _prodBlockedChapter;
-
-  /// Wakes the producer when the player moves on or playback is reset.
-  Completer<void>? _advance;
+  /// Set once nothing more will be appended: the book ran out, or the next
+  /// chapter can't be played ([_blockedChapter], [_blockedMessage]).
+  bool _queueDone = false;
+  int? _blockedChapter;
+  String? _blockedMessage;
 
   /// Last `playing` value the player reported, to tell its own transitions
   /// (lock screen, headset, a phone call) from ours.
   bool _playerPlaying = false;
 
+  /// A failed stream gets one retry with a freshly signed URL — the usual
+  /// cause is a URL that expired while paused. Reset once audio plays again.
+  bool _retriedFailure = false;
+  int? _failedSession;
+
   int _autoScrollDepth = 0;
   DateTime? _autoScrollSettledAt;
 
-  /// Paragraph of the line queued last, so a paragraph break can be heard as
-  /// well as seen.
-  int? _lastSpokenParagraph;
-
-  /// True until the first line of a run is queued — pressing play should
-  /// speak straight away.
-  bool _runStart = true;
-
-  /// Guards [_finishPlayback], which both the producer and the player's
+  /// Guards [_finishPlayback], which both the queue and the player's
   /// completion can reach.
   bool _finishing = false;
-
-  /// Set when a "……" line was skipped, so the pause in front of the next
-  /// spoken line is a scene break rather than an ordinary paragraph break.
-  bool _pendingBeat = false;
 
   /// Signals the view that the highlight moved so it can scroll to it.
   final ValueNotifier<int> highlightTick = ValueNotifier<int>(0);
@@ -190,13 +194,17 @@ class ReaderController extends ChangeNotifier {
   int get pagesLeftInChapter => _pages.length - currentPageIndex - 1;
   bool get isPlaying => _playing;
   bool get isBuffering => _buffering;
-  bool get voiceMissing => _voiceMissing;
-  String? get voiceName => _engine.voice?.name;
 
-  int get _speakerId {
-    final voice = _engine.voice;
-    if (voice == null || !voice.isMultiSpeaker) return 0;
-    return _settings.speakerFor(voice.id).clamp(0, voice.numSpeakers - 1);
+  /// Whether the chapter on screen can be listened to. Narration comes from
+  /// the backend, so a local .txt/.epub import is read-only, and so is a
+  /// remote chapter with no audio found for it.
+  bool get canListen => listenUnavailableReason == null;
+
+  /// Why [canListen] is false, for the UI; null when it is true.
+  String? get listenUnavailableReason {
+    if (!_book.isRemote) return 'Chỉ nghe được truyện trong Kho truyện';
+    if (chapter.hasAudio != true) return 'Chương này chưa có bản đọc';
+    return null;
   }
 
   /// True while the reader is scrolling itself towards the spoken sentence.
@@ -280,7 +288,29 @@ class ReaderController extends ChangeNotifier {
         (saved?.chapterIndex ?? 0).clamp(0, _book.chapterCount - 1);
     await _loadChapter(startChapter, sentenceIndex: saved?.sentenceIndex ?? 0);
     unawaited(_store.setLastBookId(_book.id));
-    unawaited(_prepareVoice());
+    unawaited(_refreshAudioAvailability());
+  }
+
+  Future<void> _refreshAudioAvailability() async {
+    if (!_book.isRemote) return;
+    try {
+      final refreshed = await _library.refreshAudioAvailability(_book);
+      if (_disposed) return;
+      _book = refreshed;
+      _safeNotify();
+    } on Object {
+      // Offline or rate-limited: keep what book.json already says.
+    }
+  }
+
+  /// Records what a chapter fetch found out about [index]'s narration.
+  void _noteHasAudio(int index, bool hasAudio) {
+    if (_book.chapters[index].hasAudio == hasAudio) return;
+    final chapters = [..._book.chapters];
+    chapters[index] = chapters[index].copyWith(hasAudio: hasAudio);
+    _book = _book.copyWith(chapters: chapters);
+    unawaited(_library.saveBook(_book));
+    _safeNotify();
   }
 
   Future<void> _loadChapter(int index, {int sentenceIndex = 0, bool atEnd = false}) async {
@@ -312,8 +342,10 @@ class ReaderController extends ChangeNotifier {
     highlightTick.value++;
   }
 
-  Future<_ChapterData> _fetchChapter(int index) async {
-    final text = await _library.loadChapterText(_book, index);
+  Future<_ChapterData> _fetchChapter(int index) async =>
+      _chapterData(index, await _library.loadChapterText(_book, index));
+
+  static _ChapterData _chapterData(int index, String text) {
     final paragraphs = parser.segment(text);
     return _ChapterData(index, text, paragraphs, [
       for (final p in paragraphs) ...p.sentences,
@@ -330,6 +362,9 @@ class ReaderController extends ChangeNotifier {
     _chapterText = data.text;
     _paragraphs = data.paragraphs;
     _sentences = data.sentences;
+    // Same index can still mean new text (the server's copy changed), so
+    // always repaginate on the next layout.
+    _pagesForChapter = -1;
   }
 
   /// Re-attempts loading the chapter that just failed to unlock — call after
@@ -337,35 +372,9 @@ class ReaderController extends ChangeNotifier {
   Future<void> retryCurrentChapter() =>
       _loadChapter(_chapterIndex, sentenceIndex: _cursor);
 
-  Future<void> _prepareVoice() async {
-    try {
-      final installed = await _voices.installedVoices();
-      if (installed.isEmpty) {
-        _voiceMissing = true;
-        _safeNotify();
-        return;
-      }
-      final wanted = _settings.voiceId;
-      final voice = installed.firstWhere(
-        (v) => v.id == wanted,
-        orElse: () => installed.first,
-      );
-      _settings.setVoiceId(voice.id);
-      _voiceMissing = false;
-      _safeNotify();
-      await _engine.start(voice);
-      _safeNotify();
-    } on Object catch (e) {
-      _error = 'Không khởi động được giọng đọc: $e';
-      _safeNotify();
-    }
-  }
-
-  /// Re-reads the installed voices — call after the user downloads one.
-  Future<void> reloadVoice() async {
-    await stop();
-    await _engine.dispose();
-    await _prepareVoice();
+  void dismissError() {
+    _error = null;
+    _safeNotify();
   }
 
   void _onSettingsChanged() {
@@ -399,191 +408,231 @@ class ReaderController extends ChangeNotifier {
   Future<void> toggle() => _playing ? pause() : play();
 
   Future<void> play() async {
-    if (_playing || _sentences.isEmpty) return;
-    if (_voiceMissing) return;
+    if (_playing || _sentences.isEmpty || !canListen) return;
 
     _playing = true;
+    _error = null;
+    _retriedFailure = false;
     _safeNotify();
 
-    // Paused on the line still on screen: carry on where the player stopped.
-    final index = _player.currentIndex;
-    if (index != null && index < _queue.length) {
-      final line = _queue[index];
-      if (line.chapter.index == _chapterIndex && line.sentence == _cursor) {
-        unawaited(_player.play());
-        return;
+    // Paused in the chapter still on screen: carry on from the cursor, which
+    // may have moved since (a swipe to another page while paused).
+    final item = _currentItem;
+    if (item != null &&
+        item.chapter.index == _chapterIndex &&
+        item.audio.isFresh()) {
+      if (item.sentenceAt(_player.position) != _cursor) {
+        await _player.seek(item.startOf(_cursor));
       }
+      unawaited(_player.play());
+      return;
     }
+    await _startAt();
+  }
 
+  /// Rebuilds the playlist from the chapter on screen, starting at the
+  /// cursor.
+  Future<void> _startAt({bool forceRefresh = false}) async {
     final session = ++_session;
+    bool live() => session == _session && !_disposed;
+
     _buffering = true;
     _safeNotify();
     highlightTick.value++;
     await _clearQueue();
-    if (session != _session) return;
-    _prodChapter = _shown;
-    _prodCursor = _cursor;
-    _prodDone = false;
-    _prodBlockedChapter = null;
-    _lastSpokenParagraph = null;
-    _pendingBeat = false;
-    _runStart = true;
-    unawaited(_produce(session));
+    if (!live()) return;
+
+    final _QueuedChapter? item;
+    try {
+      item = await _loadQueued(_chapterIndex, forceRefresh: forceRefresh);
+    } on Object catch (e) {
+      if (!live()) return;
+      _error = _describe(e);
+      await stop();
+      return;
+    }
+    if (!live()) return;
+    if (item == null) {
+      _error = 'Chương này chưa có bản đọc.';
+      await stop();
+      return;
+    }
+
+    if (item.chapter.text != _chapterText) {
+      // The server's text changed since it was cached; the timeline only
+      // matches the new one, so that is what goes on screen.
+      _show(item.chapter);
+      _cursor = _cursor.clamp(0, _sentences.isEmpty ? 0 : _sentences.length - 1);
+      _safeNotify();
+    }
+
+    _queue.add(item);
+    _queueDone = false;
+    _blockedChapter = null;
+    _blockedMessage = null;
+    try {
+      if (_player.speed != _settings.speed) {
+        await _player.setSpeed(_settings.speed);
+      }
+      await _player.setAudioSources(
+        [await _source(item)],
+        initialPosition: item.startOf(_cursor),
+      );
+    } on Object catch (e) {
+      if (live()) _onPlaybackFailure(e);
+      return;
+    }
+    if (!live()) return;
+    if (_playing) unawaited(_player.play());
+    unawaited(_extendQueue(session));
   }
 
-  /// Keeps the playlist [_lookahead] lines ahead of the player until the
-  /// book runs out or [session] is superseded.
-  Future<void> _produce(int session) async {
+  /// [index]'s narration, ready to queue — null when it has none. Uses the
+  /// chapter already on screen when the server's text still matches it, so
+  /// the highlight lines up with the sentences the view has laid out.
+  Future<_QueuedChapter?> _loadQueued(int index, {bool forceRefresh = false}) async {
+    final remote = await _library.fetchRemoteChapter(
+      _book,
+      index,
+      forceRefresh: forceRefresh,
+    );
+    final audio = remote.audio;
+    _noteHasAudio(index, audio != null);
+    if (audio == null) return null;
+    final data = index == _chapterIndex && remote.content == _chapterText
+        ? _shown
+        : _chapterData(index, remote.content);
+    return _QueuedChapter(data, audio);
+  }
+
+  /// Keeps the chapter after the one playing queued, until the book runs out
+  /// or a chapter can't be played.
+  Future<void> _extendQueue(int session) async {
     bool live() => session == _session && !_disposed;
+    if (!live() || _queueDone || _extendingSession == session) return;
+    if (_queue.isEmpty) return;
+    final playingIndex = _player.currentIndex ?? 0;
+    if (_queue.length - playingIndex > 1) return;
+
+    _extendingSession = session;
     try {
-      while (live()) {
-        final playingIndex = _player.currentIndex ?? 0;
-        if (_queue.length - playingIndex > _lookahead) {
-          final wake = _advance = Completer<void>();
-          await wake.future;
-          continue;
+      final nextIndex = _queue.last.chapter.index + 1;
+      if (nextIndex >= _book.chapterCount) {
+        _queueDone = true;
+      } else {
+        _QueuedChapter? item;
+        String? message;
+        try {
+          // Known to have no narration: no need to ask the server again.
+          item = _book.chapters[nextIndex].hasAudio == false
+              ? null
+              : await _loadQueued(nextIndex);
+          if (item == null) message = 'Chương này chưa có bản đọc.';
+        } on LoginRequiredException {
+          // The chapter itself explains this once it is shown.
+        } on EntitlementRequiredException {
+          // Same.
+        } on Object catch (e) {
+          message = _describe(e);
         }
-
-        final next = await _nextLine();
-        if (!live()) return;
-        if (next == null) {
-          _prodDone = true;
-          // Nothing left to queue and nothing left to play.
-          if (_queue.isEmpty ||
-              _player.processingState == ProcessingState.completed) {
-            await _finishPlayback();
-          }
-          return;
-        }
-
-        final (line, gapMs) = next;
-        final clip = await _engine.synthesize(
-          line.chapter.sentences[line.sentence].text,
-          speakerId: _speakerId,
-        );
-        if (!live()) return;
-        final path = await _engine.withLeadingSilence(clip.path, gapMs);
         if (!live()) return;
 
-        final source = AudioSource.file(path, tag: await _mediaItem(line));
-        if (!live()) return;
-        final starved = _player.processingState == ProcessingState.completed;
-        _queue.add(line);
-        if (_queue.length == 1) {
-          if (_player.speed != _settings.speed) {
-            await _player.setSpeed(_settings.speed);
-          }
-          await _player.setAudioSources([source]);
-          if (!live()) return;
-          if (_playing) unawaited(_player.play());
+        if (item == null) {
+          _queueDone = true;
+          _blockedChapter = nextIndex;
+          _blockedMessage = message;
         } else {
-          await _player.addAudioSource(source);
-          // The player ran dry and stopped on the last line; it does not
-          // move on by itself when more are added.
+          final starved =
+              _player.processingState == ProcessingState.completed;
+          _queue.add(item);
+          await _player.addAudioSource(await _source(item));
+          // The player ran dry and stopped at the end of the last chapter;
+          // it does not move on by itself when more is added.
           if (starved && live()) {
             await _player.seek(Duration.zero, index: _queue.length - 1);
           }
         }
       }
     } on Object catch (e) {
-      if (!live()) return;
-      _error = 'Lỗi tổng hợp giọng nói: $e';
-      await stop();
+      if (live()) _onPlaybackFailure(e);
+      return;
+    } finally {
+      if (_extendingSession == session) _extendingSession = null;
+    }
+
+    if (live() &&
+        _queueDone &&
+        _player.processingState == ProcessingState.completed) {
+      await _finishPlayback();
     }
   }
 
-  /// The next line to queue and the pause in front of it, crossing into the
-  /// next chapter when this one runs out. Null at the end of the book, or at
-  /// a chapter that can't be opened (see [_prodBlockedChapter]).
-  Future<(_QueuedLine, int)?> _nextLine() async {
-    var chapter = _prodChapter!;
-    while (true) {
-      if (_prodCursor >= chapter.sentences.length) {
-        final nextIndex = chapter.index + 1;
-        if (nextIndex >= _book.chapterCount) return null;
-        try {
-          chapter = _prodChapter = await _fetchChapter(nextIndex);
-        } on Object {
-          _prodBlockedChapter = nextIndex;
-          return null;
-        }
-        _prodCursor = 0;
-        // A new chapter reads as a scene break.
-        _pendingBeat = true;
-        continue;
-      }
-
-      final sentence = chapter.sentences[_prodCursor];
-      if (!sentence.isSpeakable) {
-        // "……" on a line of its own is a beat, not a word. The wait happens
-        // in front of the next spoken line, so two such lines in a row still
-        // add up to one scene break rather than two.
-        if (sentence.isPauseMark) _pendingBeat = true;
-        _prodCursor++;
-        continue;
-      }
-
-      final gapMs = _gapMsBefore(sentence);
-      _lastSpokenParagraph = sentence.paragraphIndex;
-      _pendingBeat = false;
-      _runStart = false;
-      return (_QueuedLine(chapter, _prodCursor++), gapMs);
-    }
-  }
-
-  Future<MediaItem> _mediaItem(_QueuedLine line) async {
-    final chapter = _book.chapters[line.chapter.index];
-    return MediaItem(
-      id: '${_book.id}/${line.chapter.index}/${line.sentence}',
-      title: chapter.title,
-      album: _book.title,
-      artUri: await nowPlayingArt(),
+  Future<AudioSource> _source(_QueuedChapter item) async {
+    final chapter = _book.chapters[item.chapter.index];
+    return AudioSource.uri(
+      item.audio.url,
+      tag: MediaItem(
+        id: '${_book.id}/${item.chapter.index}',
+        title: chapter.title,
+        album: _book.title,
+        duration: Duration(milliseconds: item.audio.durationMs),
+        artUri: await nowPlayingArt(),
+      ),
     );
   }
 
-  /// Silence to put in front of [sentence]. It is part of the clip, so the
-  /// playback rate scales it along with the speech.
-  int _gapMsBefore(Sentence sentence) {
-    final ms = pauseMsFor(
-      isFirst: _runStart,
-      afterBeat: _pendingBeat,
-      newParagraph: sentence.paragraphIndex != _lastSpokenParagraph,
-      startsSentence: sentence.startsSentence,
-      beatMs: _settings.beatPauseMs,
-      paragraphMs: _settings.paragraphPauseMs,
-      sentenceMs: _settings.sentencePauseMs,
-      clauseMs: _settings.clausePauseMs,
-    );
-    return ms.round();
+  _QueuedChapter? get _currentItem {
+    final index = _player.currentIndex;
+    return index != null && index < _queue.length ? _queue[index] : null;
   }
 
   void _onPlayerIndex(int? index) {
     if (index == null || index >= _queue.length || _disposed) return;
-    final line = _queue[index];
-    if (line.chapter.index != _chapterIndex) {
-      // Listening ran on into the next chapter; bring it on screen.
-      _show(line.chapter);
+    _syncCursor();
+    unawaited(_extendQueue(_session));
+  }
+
+  void _onPosition(Duration _) {
+    if (_playing) _syncCursor();
+  }
+
+  /// Moves the highlight (and, when listening ran into the next chapter, the
+  /// page) to wherever the player is.
+  void _syncCursor() {
+    final item = _currentItem;
+    if (item == null || _disposed) return;
+    final sentence = item.sentenceAt(_player.position);
+    final newChapter = item.chapter.index != _chapterIndex ||
+        !identical(item.chapter.text, _chapterText);
+    if (!newChapter && sentence == _cursor) return;
+    if (newChapter) {
+      _show(item.chapter);
       _status = ReaderStatus.ready;
     }
-    _cursor = line.sentence;
-    _buffering = false;
+    _cursor = sentence;
+    _retriedFailure = false;
     _safeNotify();
     highlightTick.value++;
     _scheduleSave();
-    _wakeProducer();
   }
 
   void _onPlayerState(PlayerState state) {
     if (_disposed) return;
+    final waiting = state.processingState == ProcessingState.loading ||
+        state.processingState == ProcessingState.buffering;
     if (state.processingState == ProcessingState.completed) {
-      if (_prodDone) {
+      if (_queueDone) {
         unawaited(_finishPlayback());
-      } else if (_playing && !_buffering) {
-        // Ran dry: the producer will restart the player when it catches up.
+      } else if (_playing) {
+        // Ran dry before the next chapter was queued; it starts as soon as
+        // it is.
         _buffering = true;
         _safeNotify();
       }
-      _wakeProducer();
+      unawaited(_extendQueue(_session));
+    } else if (_playing && _buffering != waiting) {
+      _buffering = waiting;
+      _safeNotify();
     }
 
     // Follow play/pause from outside the app — the lock screen, a headset
@@ -601,34 +650,54 @@ class ReaderController extends ChangeNotifier {
     }
   }
 
-  void _onPlayerError(Object error, StackTrace _) {
-    if (_disposed) return;
+  /// A stream that failed to load or play. Retried once with a fresh URL,
+  /// since a signed URL that expired (410) or went bad (403) is the likely
+  /// cause; after that, listening stops with the error shown.
+  void _onPlaybackFailure(Object error) {
+    if (_disposed || !_playing || _failedSession == _session) return;
+    _failedSession = _session;
+    if (!_retriedFailure) {
+      _retriedFailure = true;
+      final item = _currentItem;
+      if (item != null && item.chapter.index != _chapterIndex) {
+        _show(item.chapter);
+      }
+      unawaited(_startAt(forceRefresh: true));
+      return;
+    }
     _error = 'Lỗi phát âm thanh: $error';
     unawaited(stop());
   }
 
-  /// The last queued line has played out.
+  String _describe(Object error) => switch (error) {
+        LoginRequiredException() => 'Chương này cần đăng nhập.',
+        EntitlementRequiredException() => 'Chương này chưa được mở khoá.',
+        _ => 'Không tải được bản đọc: $error',
+      };
+
+  /// The last queued chapter has played out.
   Future<void> _finishPlayback() async {
     if (_finishing) return;
     _finishing = true;
     try {
-      final blocked = _prodBlockedChapter;
-      _prodDone = false;
-      _prodBlockedChapter = null;
+      final blocked = _blockedChapter;
+      final message = _blockedMessage;
+      _queueDone = false;
+      _blockedChapter = null;
+      _blockedMessage = null;
       await stop();
       if (blocked != null && !_disposed) {
-        // Show why listening stopped (sign in, unlock) on the chapter itself.
+        // Show why listening stopped (sign in, unlock, no narration yet) on
+        // the chapter itself.
         await _loadChapter(blocked);
+        if (message != null && _status == ReaderStatus.ready) {
+          _error = message;
+          _safeNotify();
+        }
       }
     } finally {
       _finishing = false;
     }
-  }
-
-  void _wakeProducer() {
-    final wake = _advance;
-    _advance = null;
-    if (wake != null && !wake.isCompleted) wake.complete();
   }
 
   Future<void> _clearQueue() async {
@@ -649,34 +718,28 @@ class ReaderController extends ChangeNotifier {
   Future<void> stop() async {
     _playing = false;
     _session++;
-    _wakeProducer();
+    _queueDone = false;
     await _player.stop();
     await _clearQueue();
     _buffering = false;
     _safeNotify();
   }
 
-  /// Jump to a sentence — from a tap in the text or from the skip buttons.
-  Future<void> jumpTo(int sentenceIndex, {bool keepPlaying = true}) async {
+  /// Jump to a sentence — from a tap in the text while listening.
+  Future<void> jumpTo(int sentenceIndex) async {
     if (_sentences.isEmpty) return;
-    final wasPlaying = _playing;
-    if (wasPlaying) {
-      _playing = false;
-      _session++;
-      _wakeProducer();
-      await _player.pause();
-      // Start the chosen line from its beginning, even if it's the one that
-      // was playing.
-      await _clearQueue();
-    }
-
     _cursor = sentenceIndex.clamp(0, _sentences.length - 1);
     _safeNotify();
     highlightTick.value++;
     _saveProgressNow();
+    if (!_playing) return;
 
-    // play() sees the cursor no longer matches the queue and rebuilds it.
-    if (wasPlaying && keepPlaying) await play();
+    final item = _currentItem;
+    if (item != null && item.chapter.index == _chapterIndex) {
+      await _player.seek(item.startOf(_cursor), index: _player.currentIndex);
+    } else {
+      await _startAt();
+    }
   }
 
   void _scheduleSave() {
@@ -721,7 +784,6 @@ class ReaderController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
-    _wakeProducer();
     _saveProgressNow();
     _settings.removeListener(_onSettingsChanged);
     _session++;
@@ -729,32 +791,64 @@ class ReaderController extends ChangeNotifier {
       sub.cancel();
     }
     _player.dispose();
-    _engine.dispose();
     highlightTick.dispose();
     super.dispose();
   }
 }
 
-/// How long to stay silent in front of the next spoken line.
-///
-/// The tiers, longest first: a scene break, a paragraph break, a full stop, a
-/// comma. Nothing at all before the first line of a run — pressing play should
-/// speak straight away.
+/// The timeline chunk playing at [ms] into the audio: the last one that has
+/// started by then, or the first before any has.
 @visibleForTesting
-double pauseMsFor({
-  required bool isFirst,
-  required bool afterBeat,
-  required bool newParagraph,
-  required bool startsSentence,
-  required double beatMs,
-  required double paragraphMs,
-  required double sentenceMs,
-  required double clauseMs,
-}) {
-  if (isFirst) return 0;
-  if (afterBeat) return beatMs;
-  if (newParagraph) return paragraphMs;
-  return startsSentence ? sentenceMs : clauseMs;
+int chunkIndexAt(List<TimelineChunk> chunks, int ms) {
+  var lo = 0;
+  var hi = chunks.length - 1;
+  while (lo < hi) {
+    final mid = (lo + hi + 1) >> 1;
+    if (chunks[mid].timeMs <= ms) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return lo;
+}
+
+/// For each chunk, the sentence its text starts in. Sentence spans tile the
+/// chapter text (see `segment`), so every offset falls in exactly one.
+@visibleForTesting
+List<int> chunkSentenceIndices(
+  List<TimelineChunk> chunks,
+  List<Sentence> sentences,
+) {
+  if (sentences.isEmpty) return List.filled(chunks.length, 0);
+  return [
+    for (final chunk in chunks)
+      () {
+        // First sentence that ends after the chunk's start.
+        var lo = 0;
+        var hi = sentences.length - 1;
+        while (lo < hi) {
+          final mid = (lo + hi) >> 1;
+          if (sentences[mid].end <= chunk.startOffset) {
+            lo = mid + 1;
+          } else {
+            hi = mid;
+          }
+        }
+        return lo;
+      }(),
+  ];
+}
+
+/// Where in the audio [sentence] starts being read: the first chunk that
+/// doesn't lie wholly before it. A sentence with nothing read aloud (a "……"
+/// line) starts with whatever is read next.
+@visibleForTesting
+int sentenceStartMs(List<TimelineChunk> chunks, Sentence sentence) {
+  for (final chunk in chunks) {
+    if (chunk.endOffset > sentence.start) return chunk.timeMs;
+  }
+  return chunks.last.timeMs;
 }
 
 /// Where a hand-swipe to another page should leave the playback cursor, or

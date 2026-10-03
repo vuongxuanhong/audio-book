@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
-import '../services/licenses.dart';
-
 const _appName = 'Tàng Kinh Các';
 
 class AboutScreen extends StatelessWidget {
@@ -60,7 +58,7 @@ class AboutScreen extends StatelessWidget {
                 leading: const Icon(Icons.description_outlined),
                 title: const Text('Giấy phép mã nguồn mở'),
                 subtitle:
-                    const Text('Thư viện và dữ liệu giọng đọc ứng dụng sử dụng'),
+                    const Text('Thư viện ứng dụng sử dụng'),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => showLicensePage(
                   context: context,
@@ -79,21 +77,6 @@ class AboutScreen extends StatelessWidget {
                   ),
                 ),
               ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-                child: Text('Nguồn giọng đọc',
-                    style: theme.textTheme.titleSmall
-                        ?.copyWith(color: theme.colorScheme.primary)),
-              ),
-              const ListTile(
-                title: Text('sherpa-onnx (k2-fsa)'),
-                subtitle: Text('Engine tổng hợp giọng nói · Apache-2.0'),
-              ),
-              for (final n in kThirdPartyNotices)
-                ListTile(
-                  title: Text(n.name),
-                  subtitle: Text('${n.usedFor} · ${n.license}'),
-                ),
             ],
           );
         },

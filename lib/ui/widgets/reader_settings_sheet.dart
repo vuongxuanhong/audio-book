@@ -2,13 +2,20 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../state/app_settings.dart';
+import '../../state/reader_controller.dart';
 import 'theme_mode_selector.dart';
 
+/// Must be called from inside the reader: the sheet is its own route, so the
+/// [ReaderController] is handed over explicitly.
 Future<void> showReaderSettingsSheet(BuildContext context) {
+  final controller = context.read<ReaderController>();
   return showModalBottomSheet<void>(
     context: context,
     showDragHandle: true,
-    builder: (_) => const _ReaderSettings(),
+    builder: (_) => ChangeNotifierProvider.value(
+      value: controller,
+      child: const _ReaderSettings(),
+    ),
   );
 }
 
@@ -18,6 +25,10 @@ class _ReaderSettings extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final settings = context.watch<AppSettings>();
+    // Speed and following the spoken sentence only mean something when
+    // there is narration to play.
+    final reader = context.watch<ReaderController>();
+    final canListen = reader.canListen || reader.isPlaying;
 
     return SafeArea(
       child: SingleChildScrollView(
@@ -34,8 +45,15 @@ class _ReaderSettings extends StatelessWidget {
             ),
             const Divider(height: 28),
             Text('Tốc độ đọc', style: Theme.of(context).textTheme.titleMedium),
+            if (!canListen && reader.listenUnavailableReason != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                reader.listenUnavailableReason!,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
             const SizedBox(height: 12),
-            _SpeedSlider(settings: settings),
+            _SpeedSlider(settings: settings, enabled: canListen),
             const Divider(height: 28),
             Text('Hiển thị', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
@@ -61,52 +79,7 @@ class _ReaderSettings extends StatelessWidget {
               contentPadding: EdgeInsets.zero,
               title: const Text('Tự động lật trang theo câu đang đọc'),
               value: settings.autoScroll,
-              onChanged: settings.setAutoScroll,
-            ),
-            const Divider(height: 28),
-            Text('Nhịp đọc', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 12),
-            _Slider(
-              label: 'Nghỉ hết câu',
-              value: settings.sentencePauseMs,
-              min: 0,
-              max: 1000,
-              divisions: 10,
-              display: '${(settings.sentencePauseMs / 1000).toStringAsFixed(1)}s',
-              onChanged: settings.setSentencePauseMs,
-            ),
-            _Slider(
-              label: 'Nghỉ giữa đoạn',
-              value: settings.paragraphPauseMs,
-              min: 0,
-              max: 1500,
-              divisions: 15,
-              display: '${(settings.paragraphPauseMs / 1000).toStringAsFixed(1)}s',
-              onChanged: settings.setParagraphPauseMs,
-            ),
-            _Slider(
-              label: 'Nghỉ ở dấu phẩy',
-              value: settings.clausePauseMs,
-              min: 0,
-              max: 800,
-              divisions: 8,
-              display: '${(settings.clausePauseMs / 1000).toStringAsFixed(1)}s',
-              onChanged: settings.setClausePauseMs,
-            ),
-            _Slider(
-              label: 'Ngắt cảnh',
-              value: settings.beatPauseMs,
-              min: 0,
-              max: 3000,
-              divisions: 15,
-              display: '${(settings.beatPauseMs / 1000).toStringAsFixed(1)}s',
-              onChanged: settings.setBeatPauseMs,
-            ),
-            Text(
-              'Bốn mức, ngắn dần: ngắt cảnh (dòng chỉ có “……”), hết đoạn, '
-              'hết câu, dấu phẩy. Mặc định lấy theo tài liệu về nhịp đọc '
-              '(xem README).',
-              style: Theme.of(context).textTheme.bodySmall,
+              onChanged: canListen ? settings.setAutoScroll : null,
             ),
           ],
         ),
@@ -119,9 +92,10 @@ class _ReaderSettings extends StatelessWidget {
 /// [AppSettings.speedSteps]), so this drags an index into that list rather
 /// than a continuous value.
 class _SpeedSlider extends StatelessWidget {
-  const _SpeedSlider({required this.settings});
+  const _SpeedSlider({required this.settings, required this.enabled});
 
   final AppSettings settings;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
@@ -139,7 +113,8 @@ class _SpeedSlider extends StatelessWidget {
             max: (steps.length - 1).toDouble(),
             divisions: steps.length - 1,
             label: display,
-            onChanged: (v) => settings.setSpeed(steps[v.round()]),
+            onChanged:
+                enabled ? (v) => settings.setSpeed(steps[v.round()]) : null,
           ),
         ),
         SizedBox(width: 40, child: Text(display, textAlign: TextAlign.end)),
