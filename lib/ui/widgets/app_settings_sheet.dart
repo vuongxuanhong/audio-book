@@ -1,14 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-
-import '../../state/app_settings.dart';
 import '../about_screen.dart';
-import 'theme_mode_selector.dart';
 
 /// The app's own settings, reachable outside of any open book — today just
-/// the theme and a link to the About screen. Reading-specific controls (speed, page following) live in
-/// `reader_settings_sheet.dart` instead, since they only make sense with a
-/// book open.
+/// a link to the About screen. The light/dark toggle sits in the app bars
+/// (ThemeToggleButton); reading controls (speed, page following) live in
+/// `reader_settings_sheet.dart`, since they only make sense with a book open.
 Future<void> showAppSettingsSheet(BuildContext context) {
   return showModalBottomSheet<void>(
     context: context,
@@ -22,8 +18,6 @@ class _AppSettings extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final settings = context.watch<AppSettings>();
-
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
@@ -31,13 +25,6 @@ class _AppSettings extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Giao diện', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 12),
-            ThemeModeSelector(
-              value: settings.themeMode,
-              onChanged: settings.setThemeMode,
-            ),
-            const SizedBox(height: 16),
             ListTile(
               contentPadding: EdgeInsets.zero,
               leading: const Icon(Icons.info_outline),

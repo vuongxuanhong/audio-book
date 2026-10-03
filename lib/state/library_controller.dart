@@ -53,7 +53,47 @@ class LibraryController extends ChangeNotifier {
   }
 
   /// Everything: this device's library and both server lists.
-  Future<void> refresh() => Future.wait([refreshLibrary(), _refreshRemote()]);
+  Future<void> refresh() async {
+    await Future.wait([refreshLibrary(), _refreshRemote()]);
+    await _syncCovers();
+  }
+
+  /// Server book ids whose details were fetched by [_syncCovers] this run.
+  final Set<String> _coverChecked = {};
+
+  /// Brings the covers of the books in "Đọc tiếp" up to date. Those come
+  /// from book.json, written when a book was added and otherwise only
+  /// refreshed by opening it — so a cover set on the server later never
+  /// showed up there. Books in the server lists just loaded take their
+  /// cover from there; others still without one get their details fetched,
+  /// once per run (the endpoint is rate-limited).
+  Future<void> _syncCovers() async {
+    final listed = {
+      for (final b in [..._featured, ..._newBooks]) b.id: b.coverUrl,
+    };
+    var changed = false;
+    for (final book in continueReading) {
+      final remoteId = book.remoteId!;
+      Book? updated;
+      if (listed.containsKey(remoteId)) {
+        final url = listed[remoteId];
+        if (url == book.coverUrl) continue;
+        updated = await _repo.saveBook(book.withCover(url));
+      } else {
+        if (book.coverUrl != null || !_coverChecked.add(remoteId)) continue;
+        try {
+          updated = await _repo.refreshAudioAvailability(book);
+        } on Object {
+          continue; // Offline or rate-limited: try again next run.
+        }
+        if (updated.coverUrl == null) continue;
+      }
+      final done = updated;
+      _books = [for (final b in _books) b.id == done.id ? done : b];
+      changed = true;
+    }
+    if (changed) notifyListeners();
+  }
 
   /// Just this device's library — after closing the reader, when only the
   /// reading position can have changed.

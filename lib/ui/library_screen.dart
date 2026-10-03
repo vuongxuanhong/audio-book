@@ -6,6 +6,7 @@ import '../services/remote_book_service.dart';
 import '../state/library_controller.dart';
 import 'reader_screen.dart';
 import 'widgets/book_cover.dart';
+import 'widgets/theme_toggle_button.dart';
 import 'widgets/app_settings_sheet.dart';
 
 /// Home: "Đọc tiếp" (books with a saved position on this device), then the
@@ -27,6 +28,7 @@ class LibraryScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Tủ sách'),
         actions: [
+          const ThemeToggleButton(),
           IconButton(
             tooltip: 'Cài đặt',
             icon: const Icon(Icons.settings_outlined),
@@ -187,8 +189,8 @@ class _ContinueTile extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               SizedBox(
-                width: 44,
-                height: 66,
+                width: 45,
+                height: 60,
                 child: BookCover(title: book.title, url: book.coverUrl, radius: 4),
               ),
               const SizedBox(width: 14),
@@ -277,8 +279,8 @@ class _BookGrid extends StatelessWidget {
       sliver: SliverLayoutBuilder(
         builder: (context, constraints) {
           final width = (constraints.crossAxisExtent - _spacing * (_columns - 1)) / _columns;
-          // A 2:3 cover, then two lines of title and one of details.
-          final extent = width * 1.5 + 8 + textScaler.scale(20) * 2 + 4 + textScaler.scale(18) + 4;
+          // A 3:4 cover, then up to two lines of title.
+          final extent = width * 4 / 3 + 8 + textScaler.scale(18) * 2 + 4;
           return SliverGrid.builder(
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: _columns,
@@ -303,7 +305,6 @@ class _BookCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final details = theme.textTheme.bodySmall;
     return InkWell(
       borderRadius: BorderRadius.circular(8),
       onTap: () => _openRemote(context, item),
@@ -311,36 +312,31 @@ class _BookCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           AspectRatio(
-            aspectRatio: 2 / 3,
+            aspectRatio: 3 / 4,
             child: BookCover(title: item.title, url: item.coverUrl, radius: 8),
           ),
           const SizedBox(height: 8),
-          Text(
-            item.title,
-            style: theme.textTheme.titleSmall?.copyWith(height: 1.25),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
-          const SizedBox(height: 4),
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Flexible(
+              Expanded(
                 child: Text(
-                  item.author.isNotEmpty
-                      ? item.author
-                      : '${item.chapterCount} chương',
-                  style: details,
-                  maxLines: 1,
+                  item.title,
+                  style: theme.textTheme.titleSmall?.copyWith(height: 1.25),
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
               if (item.hasAudio) ...[
-                const SizedBox(width: 6),
-                Icon(
-                  Icons.headphones_outlined,
-                  size: 14,
-                  color: theme.colorScheme.primary,
-                  semanticLabel: 'Có bản đọc',
+                const SizedBox(width: 4),
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Icon(
+                    Icons.headphones_outlined,
+                    size: 16,
+                    color: theme.colorScheme.primary,
+                    semanticLabel: 'Có bản đọc',
+                  ),
                 ),
               ],
             ],
