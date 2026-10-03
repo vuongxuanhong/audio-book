@@ -40,6 +40,7 @@ class RemoteBookSummary {
     required this.author,
     required this.chapterCount,
     required this.totalChars,
+    this.totalDurationMs = 0,
   });
 
   final String id;
@@ -48,12 +49,18 @@ class RemoteBookSummary {
   final int chapterCount;
   final int totalChars;
 
+  /// Total narration across chapters; 0 when nothing has been narrated.
+  final int totalDurationMs;
+
+  bool get hasAudio => totalDurationMs > 0;
+
   factory RemoteBookSummary.fromJson(Map<String, dynamic> json) => RemoteBookSummary(
         id: json['id'] as String,
         title: json['title'] as String,
         author: json['author'] as String,
         chapterCount: json['chapter_count'] as int,
         totalChars: json['total_chars'] as int,
+        totalDurationMs: json['total_duration_ms'] as int? ?? 0,
       );
 }
 
@@ -100,11 +107,17 @@ class RemoteBookService {
 
   final Dio _dio;
 
-  Future<RemoteCatalogPage> fetchCatalog({String? cursor}) async {
-    final response = await _dio.get(
-      '/v1/books',
-      queryParameters: {'cursor': ?cursor},
-    );
+  /// One page of published books, most recently added first. A cursor only
+  /// continues the listing it came from.
+  Future<RemoteCatalogPage> fetchNewBooks({String? cursor}) =>
+      _fetchCatalog({'sort': 'new', 'cursor': ?cursor});
+
+  /// The books an admin has featured, in their chosen order — one page.
+  Future<List<RemoteBookSummary>> fetchFeaturedBooks() async =>
+      (await _fetchCatalog({'featured': true})).items;
+
+  Future<RemoteCatalogPage> _fetchCatalog(Map<String, Object> query) async {
+    final response = await _dio.get('/v1/books', queryParameters: query);
     final body = response.data as Map<String, dynamic>;
     return RemoteCatalogPage(
       items: (body['items'] as List<dynamic>)
@@ -138,10 +151,22 @@ class RemoteBookService {
     }
   }
 
-  Future<void> pushProgress(String bookId, String chapterId, int position) async {
+  /// Saves the signed-in user's position. [updatedAt] is when the reader was
+  /// there, which lets the server ignore it if a newer one is already saved —
+  /// see ProgressSync, which sends these late and in batches.
+  Future<void> pushProgress(
+    String bookId,
+    String chapterId,
+    int position, {
+    required DateTime updatedAt,
+  }) async {
     await _dio.put(
       '/v1/me/progress/$bookId',
-      data: {'chapter_id': chapterId, 'position': position},
+      data: {
+        'chapter_id': chapterId,
+        'position': position,
+        'updated_at': updatedAt.toUtc().toIso8601String(),
+      },
     );
   }
 

@@ -2,10 +2,12 @@ import 'package:audio_session/audio_session.dart';
 import 'package:flutter/material.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'services/api_client.dart';
 import 'services/device_auth.dart';
 import 'services/library_repository.dart';
+import 'services/progress_sync.dart';
 import 'services/remote_book_service.dart';
 import 'services/settings_store.dart';
 import 'state/app_settings.dart';
@@ -31,7 +33,12 @@ Future<void> main() async {
   final deviceAuth = DeviceAuth();
   final apiClient = ApiClient(deviceAuth);
   final remoteBooks = RemoteBookService(apiClient);
-  final library = LibraryRepository(remote: remoteBooks);
+  final progressSync = ProgressSync(
+    apiClient,
+    remoteBooks,
+    await SharedPreferences.getInstance(),
+  )..start();
+  final library = LibraryRepository(remote: remoteBooks, sync: progressSync);
 
   runApp(AudioBookApp(
     store: store,
@@ -65,7 +72,7 @@ class AudioBookApp extends StatelessWidget {
         Provider.value(value: remoteBooks),
         ChangeNotifierProvider(create: (_) => AppSettings(store)),
         ChangeNotifierProvider(
-          create: (_) => LibraryController(library, store)..refresh(),
+          create: (_) => LibraryController(library, store, remoteBooks)..refresh(),
         ),
       ],
       // A Consumer here (rather than watching AppSettings directly in this

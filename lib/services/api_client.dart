@@ -26,7 +26,12 @@ class ApiClient {
         },
         onError: (error, handler) async {
           final response = error.response;
-          if (response?.statusCode == 401 && !_isRetry(error.requestOptions)) {
+          // A 401 with {"error": "login_required"} means the device isn't
+          // signed in, not that the token expired — a fresh token can't fix
+          // it, so it isn't retried.
+          if (response?.statusCode == 401 &&
+              !_isLoginRequired(response) &&
+              !_isRetry(error.requestOptions)) {
             final token = await _auth.ensureAccessToken(forceRefresh: true);
             final retryOptions = error.requestOptions;
             retryOptions.headers['Authorization'] = 'Bearer $token';
@@ -64,5 +69,20 @@ class ApiClient {
 
   Dio get dio => _dio;
 
+  /// Whether a user (not just this device) is signed in, as of the last
+  /// token — see [checkLoggedIn] before any request has been made.
+  bool get isLoggedIn => _auth.isLoggedIn;
+
+  /// Like [isLoggedIn], after making sure there is a token to tell from.
+  Future<bool> checkLoggedIn() async {
+    await _auth.ensureAccessToken();
+    return _auth.isLoggedIn;
+  }
+
   bool _isRetry(RequestOptions options) => options.extra['retried'] == true;
+
+  static bool _isLoginRequired(Response<dynamic>? response) {
+    final data = response?.data;
+    return data is Map && data['error'] == 'login_required';
+  }
 }

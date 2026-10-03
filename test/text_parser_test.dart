@@ -2,55 +2,6 @@ import 'package:audio_book/services/text_parser.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  group('parseRawText', () {
-    test('splits Vietnamese chapter headings', () {
-      final book = parseRawText(
-        'Sưu Sơn Hàng Ma\n\n'
-        'Chương 1: Thiếu niên xuống núi\n'
-        'Trời vừa hửng sáng.\n\n'
-        'Chương 2: Gặp yêu\n'
-        'Gió thổi qua rừng trúc.\n',
-        fallbackTitle: 'khong-dung',
-      );
-
-      expect(book.title, 'Sưu Sơn Hàng Ma');
-      expect(book.chapters.length, 2);
-      expect(book.chapters[0].title, 'Chương 1: Thiếu niên xuống núi');
-      expect(book.chapters[0].text, 'Trời vừa hửng sáng.');
-      expect(book.chapters[1].title, 'Chương 2: Gặp yêu');
-    });
-
-    test('reads headings wrapped in decorative brackets', () {
-      // The shape produced by translations of Chinese web novels: full-width
-      // brackets around the line and a full-width colon.
-      final book = parseRawText(
-        '\n\n【Chương 1：Trong Long Bối Lĩnh, tiểu dược lang】\n\n'
-        'Phủ An Ninh, Trà Mã Đạo.\n\n'
-        '【Chương 2: Ấn chữ Sơn, con đường Kỳ Môn】\n\n'
-        'Gió thổi qua khe núi.\n',
-        fallbackTitle: 'Chuong1-5',
-      );
-
-      expect(book.chapters.length, 2);
-      expect(book.chapters[0].title,
-          'Chương 1: Trong Long Bối Lĩnh, tiểu dược lang');
-      expect(book.chapters[0].text, 'Phủ An Ninh, Trà Mã Đạo.');
-      expect(book.chapters[1].title, 'Chương 2: Ấn chữ Sơn, con đường Kỳ Môn');
-    });
-
-    test('keeps a heading without a subtitle', () {
-      final book = parseRawText('Chương 7\nMột dòng.', fallbackTitle: 'x');
-      expect(book.chapters.single.title, 'Chương 7');
-    });
-
-    test('falls back to one chapter when nothing looks like a heading', () {
-      final book = parseRawText('Chỉ là văn xuôi.\nKhông có chương.',
-          fallbackTitle: 'Truyện của tôi');
-      expect(book.chapters.length, 1);
-      expect(book.chapters.single.title, 'Truyện của tôi');
-    });
-  });
-
   group('segment', () {
     test('produces contiguous sentence spans that rebuild the text', () {
       const text = 'Hắn nói: "Đi thôi!" Rồi quay đi.\n\nTrời mưa. Rất to…';

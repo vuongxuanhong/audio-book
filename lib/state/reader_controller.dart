@@ -129,6 +129,9 @@ class ReaderController extends ChangeNotifier {
 
   int _session = 0;
   Timer? _saveTimer;
+
+  /// Last position queued for the server, as (chapter, sentence).
+  (int, int)? _lastQueued;
   late final List<StreamSubscription<Object?>> _subs;
 
   /// The playlist, index for index with the player's.
@@ -196,13 +199,13 @@ class ReaderController extends ChangeNotifier {
   bool get isBuffering => _buffering;
 
   /// Whether the chapter on screen can be listened to. Narration comes from
-  /// the backend, so a local .txt/.epub import is read-only, and so is a
-  /// remote chapter with no audio found for it.
+  /// the backend, so a book imported from a local file by an earlier version
+  /// is read-only, and so is a remote chapter with no audio found for it.
   bool get canListen => listenUnavailableReason == null;
 
   /// Why [canListen] is false, for the UI; null when it is true.
   String? get listenUnavailableReason {
-    if (!_book.isRemote) return 'Chỉ nghe được truyện trong Kho truyện';
+    if (!_book.isRemote) return 'Truyện này không có bản đọc';
     if (chapter.hasAudio != true) return 'Chương này chưa có bản đọc';
     return null;
   }
@@ -287,6 +290,10 @@ class ReaderController extends ChangeNotifier {
     final startChapter =
         (saved?.chapterIndex ?? 0).clamp(0, _book.chapterCount - 1);
     await _loadChapter(startChapter, sentenceIndex: saved?.sentenceIndex ?? 0);
+    // Opening a book is enough for it to count as being read ("Đọc tiếp"),
+    // and the library reloads as soon as the reader is popped — before
+    // dispose() would get to save.
+    if (_status == ReaderStatus.ready) _saveProgressNow();
     unawaited(_store.setLastBookId(_book.id));
     unawaited(_refreshAudioAvailability());
   }
@@ -742,6 +749,13 @@ class ReaderController extends ChangeNotifier {
     }
   }
 
+  /// Saves the position right away — when leaving the reader, so the library
+  /// it returns to already shows it — and sends it to the server.
+  void saveProgress() {
+    _saveProgressNow();
+    unawaited(_library.flushRemoteProgress());
+  }
+
   void _scheduleSave() {
     _saveTimer?.cancel();
     _saveTimer = Timer(const Duration(seconds: 2), _saveProgressNow);
@@ -749,14 +763,19 @@ class ReaderController extends ChangeNotifier {
 
   void _saveProgressNow() {
     _saveTimer?.cancel();
+    final now = DateTime.now();
     unawaited(_store.saveProgress(ReadingProgress(
       bookId: _book.id,
       chapterIndex: _chapterIndex,
       sentenceIndex: _cursor,
-      updatedAt: DateTime.now(),
+      updatedAt: now,
     )));
-    if (_book.isRemote) {
-      unawaited(_library.pushRemoteProgress(_book, _chapterIndex, _cursor));
+    // Only an actual move is worth sending: dispose() saves again right after
+    // leaving the reader has already sent the same position.
+    final position = (_chapterIndex, _cursor);
+    if (position != _lastQueued) {
+      _lastQueued = position;
+      _library.queueRemoteProgress(_book, _chapterIndex, _cursor, now);
     }
   }
 

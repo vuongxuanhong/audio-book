@@ -32,7 +32,15 @@ class ReaderScreen extends StatelessWidget {
         store: context.read<SettingsStore>(),
         settings: context.read<AppSettings>(),
       ),
-      child: const _ReaderView(),
+      child: Builder(
+        builder: (context) => PopScope(
+          // Runs as the route pops, before the library screen it returns to
+          // reloads — dispose() would save too late for that.
+          onPopInvokedWithResult: (_, _) =>
+              context.read<ReaderController>().saveProgress(),
+          child: const _ReaderView(),
+        ),
+      ),
     );
   }
 }

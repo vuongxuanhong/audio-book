@@ -9,8 +9,7 @@ còn chạy model TTS trên máy.
 
 | Chức năng | Trạng thái |
 | --- | --- |
-| Kho truyện từ backend, thêm vào tủ sách | ✅ |
-| Nhập truyện `.txt` / `.epub`, tự tách chương (chỉ đọc chữ) | ✅ |
+| Tủ sách: Đọc tiếp · Truyện nổi bật · Truyện mới (từ backend) | ✅ |
 | Đọc chữ (cỡ chữ / giãn dòng tuỳ chỉnh) | ✅ |
 | Nghe audio stream từ backend, tự sang chương | ✅ |
 | Highlight câu đang đọc + tự lật trang theo | ✅ |
@@ -40,14 +39,14 @@ Audio được stream từ `AUDIO_BASE_URL` mà backend ký vào URL (mặc đ�
 `http://localhost:8080`). Với HTTP thường, iOS cần cho phép mạng cục bộ (ATS)
 và Android cần cho phép cleartext.
 
-Vào **Kho truyện** (biểu tượng đám mây) để thêm truyện có bản đọc. Truyện nhập
-từ tệp `.txt` / `.epub` chỉ đọc chữ được, không có nút nghe.
+Truyện chỉ đến từ server, app không còn nhập tệp. **Tủ sách** có ba section,
+section nào trống thì ẩn:
 
-Kiểm tra trước một tệp mà không cần mở app:
-
-```bash
-dart run tool/parse_check.dart Chuong1-5.txt   # in ra tên chương, số câu
-```
+- **Đọc tiếp** — truyện đã mở trên máy này, đọc gần nhất lên đầu.
+- **Truyện nổi bật** — `GET /v1/books?featured=true`, do admin chọn và xếp
+  thứ tự (`python -m scripts.feature_book <book_id> <rank>` ở backend).
+- **Truyện mới** — `GET /v1/books?sort=new`, mới thêm lên đầu, cuộn tới cuối
+  thì tải trang tiếp.
 
 ## Kiến trúc
 
@@ -58,20 +57,15 @@ lib/
   services/
     api_client.dart          Dio + token thiết bị/người dùng
     remote_book_service.dart catalog, chi tiết truyện, nội dung + audio chương
-    text_parser.dart         tách chương + tách câu (giữ offset ký tự)
+    text_parser.dart         tách câu (giữ offset ký tự)
     library_repository.dart  lưu truyện ra file trong Documents (chương remote
                              được mã hoá AES-GCM)
     settings_store.dart      SharedPreferences: vị trí đọc, tốc độ, cỡ chữ…
   state/       AppSettings, LibraryController, ReaderController (ChangeNotifier)
-  ui/          LibraryScreen, CatalogScreen, ReaderScreen + widgets
+  ui/          LibraryScreen (Tủ sách), ReaderScreen + widgets
 ```
 
 ### Vì sao lại thiết kế như vậy
-
-**Nhận dạng đầu chương.** `_headingOf` bóc dấu ngoặc trang trí (`【…】`, `「…」`,
-`《…》`) và chấp nhận cả dấu hai chấm toàn rộng `：` trước khi so khớp — đây là
-dạng phổ biến của truyện Trung dịch sang tiếng Việt (`【Chương 1：Tiêu đề】`).
-Nếu tệp không có dòng nào giống đầu chương, cả tệp thành một chương duy nhất.
 
 **Tách câu giữ offset.** `segment()` trả về các `Sentence` có `start`/`end` là
 vị trí ký tự trong nguyên văn chương, và các span liền nhau phủ kín toàn bộ
@@ -119,6 +113,14 @@ Rời màn hình đọc là dừng hẳn.
 (`didChangeAppLifecycleState`). Nếu để các lần lật trang dồn lại chạy muộn,
 chúng bị hiểu nhầm là người dùng tự lướt trang và dừng phát.
 
+**Đồng bộ vị trí đọc theo lô.** Vị trí luôn lưu ở máy trước (SettingsStore).
+Khi đã đăng nhập, `ProgressSync` đưa vị trí mới nhất của mỗi truyện vào hàng
+chờ (lưu trong SharedPreferences, nên app bị kill hay mất mạng cũng không
+mất) và đẩy lên server: 5 phút một lần, ngay khi rời màn hình đọc, khi app
+xuống nền, và lúc mở app nếu hàng chờ còn sót. Mỗi bản ghi kèm thời điểm đọc
+thật (`updated_at`), nên server bỏ qua bản ghi đến muộn đã bị thiết bị khác
+vượt qua. Chưa đăng nhập thì không gửi gì.
+
 **Tốc độ đọc đổi ở player.** `AudioPlayer.setSpeed` — đổi tức thì, không
 cần tải lại audio.
 
@@ -137,11 +139,11 @@ và mọi thay đổi con trỏ đều notify. Luật nằm trong hàm thuần
 flutter test
 ```
 
-Unit test cho parser, phân trang, quy tắc con trỏ khi lướt trang, nhập EPUB, và
-ánh xạ timeline ↔ câu.
+Unit test cho tách câu, phân trang, quy tắc con trỏ khi lướt trang, và ánh xạ
+timeline ↔ câu.
 
 ## Việc còn lại (ngoài phạm vi MVP)
 
 - Tải audio về để nghe offline (hiện chỉ stream).
 - Mua / mở khoá truyện trong app (hiện admin cấp quyền bằng tay).
-- Nhập từ URL.
+- Ảnh bìa truyện (hiện dùng ảnh bìa chung).

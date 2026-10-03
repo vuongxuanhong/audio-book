@@ -1,141 +1,15 @@
 import '../models/sentence.dart';
 
-class ParsedChapter {
-  ParsedChapter({required this.title, required this.text});
-  final String title;
-  final String text;
-}
-
-class ParsedBook {
-  ParsedBook({required this.title, required this.chapters, this.author = ''});
-  final String title;
-  final String author;
-  final List<ParsedChapter> chapters;
-}
-
-/// Headings we see in Vietnamese novels and in translations of Chinese web
-/// novels: "Chương 12", "Chương 12: Tên chương", "Hồi thứ ba", "Quyển 2",
-/// plus the plain-English "Chapter 3" that survives some conversions.
-final RegExp _headingRe = RegExp(
-  r'^\s{0,6}(?:(?:Quyển|QUYỂN)\s+\S+\s*[-–—:：.]?\s*)?'
-  r'(Chương|CHƯƠNG|Chuong|Chapter|CHAPTER|Hồi|HỒI|Phần|PHẦN)'
-  r'\s*(?:thứ\s+)?([0-9]{1,4}|[IVXLCDM]{1,8})\b\s*[:：.、\-–—]?\s*(.{0,120})$',
-);
-
-/// Translations of Chinese web novels usually wrap the heading in decorative
-/// brackets: 【Chương 1：Tiêu đề】. Strip them before matching.
-final RegExp _headingOpenRe = RegExp(r'^[【〖「『《〔\[(]+\s*');
-final RegExp _headingCloseRe = RegExp(r'\s*[】〗」』》〕\])]+$');
-
-/// A line that is short, on its own, and looks like a title even without the
-/// word "Chương" — e.g. "第一章 …" left over from the source, or "1. Mở đầu".
-final RegExp _numberedHeadingRe = RegExp(r'^\s{0,6}([0-9]{1,4})\s*[.、:）)]\s*(\S.{0,110})$');
-
 const int _maxSentenceChars = 220;
 
-/// Commas and friends split a sentence into clauses, each rendered as its own
-/// clip so the reader can put a measured pause between them. Below this many
-/// characters a clause is not worth splitting off — "Hắn nói:" should stay in
-/// one piece.
+/// Commas and friends split a sentence into clauses, each its own span, so
+/// the highlight and tap-to-seek work at a finer grain than whole sentences.
+/// Below this many characters a clause is not worth splitting off — "Hắn
+/// nói:" should stay in one piece.
 const int _minClauseChars = 12;
 const String _clauseBreaks = ',;:—–';
 const String _terminators = '.!?…';
 const String _closers = '"”’\'»)]、';
-
-/// Split a raw `.txt` file into chapters. Falls back to one single chapter
-/// when the file has no recognisable headings.
-ParsedBook parseRawText(String raw, {required String fallbackTitle}) {
-  final normalized = raw
-      .replaceAll('\r\n', '\n')
-      .replaceAll('\r', '\n')
-      .replaceAll('﻿', '');
-
-  final lines = normalized.split('\n');
-  final chapters = <ParsedChapter>[];
-  final buffer = StringBuffer();
-  String? currentTitle;
-  String? bookTitle;
-  var sawHeading = false;
-
-  void flush() {
-    final text = _tidy(buffer.toString());
-    buffer.clear();
-    if (currentTitle == null && text.isEmpty) return;
-    chapters.add(ParsedChapter(
-      title: currentTitle ?? 'Mở đầu',
-      text: text,
-    ));
-  }
-
-  for (var i = 0; i < lines.length; i++) {
-    final line = lines[i];
-    final heading = _headingOf(line);
-    if (heading != null) {
-      // Text seen before the first heading is either the book title or a
-      // preface; keep it as its own chapter so nothing is silently dropped.
-      if (currentTitle == null) {
-        final preface = _tidy(buffer.toString());
-        if (preface.isNotEmpty) {
-          final prefaceLines = preface.split('\n');
-          if (prefaceLines.length <= 3) {
-            bookTitle = prefaceLines.first.trim();
-            buffer.clear();
-          }
-        }
-      }
-      flush();
-      sawHeading = true;
-      currentTitle = heading;
-      continue;
-    }
-    buffer.writeln(line);
-  }
-  flush();
-
-  // A file with no headings at all is one unnamed chapter; give it the
-  // book's own name rather than a made-up "Mở đầu".
-  if (!sawHeading) {
-    final text = _tidy(normalized);
-    chapters
-      ..clear()
-      ..add(ParsedChapter(title: fallbackTitle, text: text));
-  }
-
-  return ParsedBook(
-    title: (bookTitle != null && bookTitle.isNotEmpty)
-        ? bookTitle
-        : fallbackTitle,
-    chapters: chapters,
-  );
-}
-
-String? _headingOf(String line) {
-  final trimmed = line
-      .trim()
-      .replaceFirst(_headingOpenRe, '')
-      .replaceFirst(_headingCloseRe, '')
-      .trim();
-  if (trimmed.isEmpty || trimmed.length > 140) return null;
-
-  final m = _headingRe.firstMatch(trimmed);
-  if (m != null) {
-    final rest = (m.group(3) ?? '').trim();
-    final head = '${m.group(1)} ${m.group(2)}';
-    return rest.isEmpty ? head : '$head: $rest';
-  }
-
-  final n = _numberedHeadingRe.firstMatch(trimmed);
-  if (n != null && trimmed.length <= 80) {
-    return 'Chương ${n.group(1)}: ${n.group(2)!.trim()}';
-  }
-  return null;
-}
-
-String _tidy(String text) {
-  // Collapse runs of blank lines but keep paragraph breaks.
-  final collapsed = text.replaceAll(RegExp(r'\n{3,}'), '\n\n');
-  return collapsed.trim();
-}
 
 /// Break chapter text into paragraphs and sentences, keeping exact character
 /// offsets so the reader can highlight the spoken span in place.

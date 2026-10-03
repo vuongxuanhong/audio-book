@@ -9,27 +9,29 @@ import 'package:path_provider/path_provider.dart';
 import '../models/book.dart';
 import '../models/chapter_audio.dart';
 import '../models/reading_progress.dart';
-import 'epub_importer.dart';
+import 'progress_sync.dart';
 import 'remote_book_service.dart';
-import 'text_parser.dart';
 
-/// Books live as plain files under `<documents>/books/<bookId>/`:
-/// `book.json` for the metadata and `ch_0001.txt` … for the chapter bodies.
-/// Keeping chapters in separate files means a 5 MB novel never has to be held
-/// in memory all at once.
+/// Books from the server, kept under `<documents>/books/<bookId>/`:
+/// `book.json` for the metadata and one file per chapter that has been read,
+/// so a 5 MB novel never has to be held in memory all at once.
 ///
-/// A book fetched from the remote catalog ([Book.isRemote]) uses the same
-/// `book.json` shape and the same `loadChapterText` call, but its chapter
-/// files hold AES-GCM-encrypted bytes rather than plain text (see
+/// Chapter files hold AES-GCM-encrypted bytes rather than plain text (see
 /// [_cacheEncrypted]/[_readCache]) — caching a downloaded chapter as plain
-/// `.txt`, the way a local import is stored, would undo everything the
-/// backend's auth/entitlement checks are for the moment it lands on disk.
+/// text would undo everything the backend's auth/entitlement checks are for
+/// the moment it lands on disk. Books imported from .txt/.epub files by
+/// earlier versions of the app are still readable from their plain files.
 class LibraryRepository {
-  LibraryRepository({RemoteBookService? remote, FlutterSecureStorage? secureStorage})
-      : _remote = remote,
+  LibraryRepository({
+    RemoteBookService? remote,
+    ProgressSync? sync,
+    FlutterSecureStorage? secureStorage,
+  })  : _remote = remote,
+        _sync = sync,
         _secureStorage = secureStorage ?? const FlutterSecureStorage();
 
   final RemoteBookService? _remote;
+  final ProgressSync? _sync;
   final FlutterSecureStorage _secureStorage;
 
   Directory? _root;
@@ -67,26 +69,8 @@ class LibraryRepository {
     return books;
   }
 
-  Future<Book> importText({
-    required String rawText,
-    required String fallbackTitle,
-  }) async {
-    final parsed = parseRawText(rawText, fallbackTitle: fallbackTitle);
-    return _saveParsedBook(parsed);
-  }
-
-  Future<Book> importFile(File file) async {
-    final name = file.uri.pathSegments.last;
-    final fallbackTitle = name.replaceAll(RegExp(r'\.\w+$'), '');
-    final parsed = name.toLowerCase().endsWith('.epub')
-        ? parseEpub(await file.readAsBytes(), fallbackTitle: fallbackTitle)
-        : parseRawText(await _readAsText(file), fallbackTitle: fallbackTitle);
-    return _saveParsedBook(parsed);
-  }
-
-  /// Registers a book from the remote catalog in the local library — it
-  /// shows up in Tủ sách immediately, same as a local import, before any
-  /// chapter content has actually been downloaded.
+  /// Registers a book from the remote catalog in the local library, before
+  /// any chapter content has actually been downloaded.
   Future<Book> importFromRemote(RemoteBookMeta meta) async {
     final id = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
     final dir = Directory('${(await _booksDir()).path}/$id');
@@ -136,35 +120,6 @@ class LibraryRepository {
     if (dir.existsSync()) {
       File('${dir.path}/book.json').writeAsStringSync(book.encode());
     }
-    return book;
-  }
-
-  Future<Book> _saveParsedBook(ParsedBook parsed) async {
-    final id = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
-    final dir = Directory('${(await _booksDir()).path}/$id');
-    dir.createSync(recursive: true);
-
-    final chapters = <ChapterRef>[];
-    for (var i = 0; i < parsed.chapters.length; i++) {
-      final chapter = parsed.chapters[i];
-      final fileName = 'ch_${i.toString().padLeft(4, '0')}.txt';
-      File('${dir.path}/$fileName').writeAsStringSync(chapter.text);
-      chapters.add(ChapterRef(
-        index: i,
-        title: chapter.title,
-        fileName: fileName,
-        charCount: chapter.text.length,
-      ));
-    }
-
-    final book = Book(
-      id: id,
-      title: parsed.title,
-      author: parsed.author,
-      importedAt: DateTime.now(),
-      chapters: chapters,
-    );
-    File('${dir.path}/book.json').writeAsStringSync(book.encode());
     return book;
   }
 
@@ -219,23 +174,23 @@ class LibraryRepository {
     return fresh;
   }
 
-  /// Best-effort: push the reading position for a remote book up to the
-  /// server so it can be picked up on another signed-in device. Silently
-  /// does nothing for a local book, when there's no remote service wired up,
-  /// or when the push fails (e.g. not signed in, offline) — losing a live
-  /// sync update must never interrupt reading.
-  Future<void> pushRemoteProgress(Book book, int chapterIndex, int position) async {
-    final remote = _remote;
-    if (remote == null || !book.isRemote) return;
+  /// Queues the reading position of a remote book for the server (see
+  /// [ProgressSync]), so it can be picked up on another signed-in device.
+  /// Does nothing for a local book or when there's no sync wired up.
+  void queueRemoteProgress(Book book, int chapterIndex, int position, DateTime updatedAt) {
+    final sync = _sync;
     final chapterId = book.chapters[chapterIndex].remoteChapterId;
-    if (chapterId == null) return;
-    try {
-      await remote.pushProgress(book.remoteId!, chapterId, position);
-    } on Object {
-      // Best-effort — the local SettingsStore copy is the source of truth
-      // for this device regardless.
-    }
+    if (sync == null || !book.isRemote || chapterId == null) return;
+    sync.record(
+      remoteBookId: book.remoteId!,
+      chapterId: chapterId,
+      position: position,
+      updatedAt: updatedAt,
+    );
   }
+
+  /// Sends queued positions now — when the reader closes a book.
+  Future<void> flushRemoteProgress() async => _sync?.flush();
 
   /// Returns the server's saved progress for a remote book, mapped to a
   /// local chapter index, or null if there's none / this isn't a remote book
@@ -263,17 +218,6 @@ class LibraryRepository {
   Future<void> deleteBook(Book book) async {
     final dir = Directory('${(await _booksDir()).path}/${book.id}');
     if (dir.existsSync()) dir.deleteSync(recursive: true);
-  }
-
-  /// Most Vietnamese novel dumps are UTF-8, but some are still Windows-1258 or
-  /// Latin-1. Fall back rather than throwing on a bad byte.
-  Future<String> _readAsText(File file) async {
-    final bytes = await file.readAsBytes();
-    try {
-      return const Utf8Decoder(allowMalformed: false).convert(bytes);
-    } on FormatException {
-      return const Latin1Decoder(allowInvalid: true).convert(bytes);
-    }
   }
 
   static const _kCacheKeyStorageKey = 'remote.chapterCacheKey';
