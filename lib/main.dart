@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'services/api_client.dart';
+import 'services/audio_cache.dart';
 import 'services/device_auth.dart';
 import 'services/library_repository.dart';
 import 'services/progress_sync.dart';
@@ -39,12 +40,14 @@ Future<void> main() async {
     await SharedPreferences.getInstance(),
   )..start();
   final library = LibraryRepository(remote: remoteBooks, sync: progressSync);
+  final audioCache = AudioCache();
 
   runApp(AudioBookApp(
     store: store,
     library: library,
     deviceAuth: deviceAuth,
     remoteBooks: remoteBooks,
+    audioCache: audioCache,
   ));
 }
 
@@ -55,12 +58,14 @@ class AudioBookApp extends StatelessWidget {
     required this.library,
     required this.deviceAuth,
     required this.remoteBooks,
+    required this.audioCache,
   });
 
   final SettingsStore store;
   final LibraryRepository library;
   final DeviceAuth deviceAuth;
   final RemoteBookService remoteBooks;
+  final AudioCache audioCache;
 
   @override
   Widget build(BuildContext context) {
@@ -70,6 +75,7 @@ class AudioBookApp extends StatelessWidget {
         Provider.value(value: library),
         Provider.value(value: deviceAuth),
         Provider.value(value: remoteBooks),
+        Provider.value(value: audioCache),
         ChangeNotifierProvider(create: (_) => AppSettings(store)),
         ChangeNotifierProvider(
           create: (_) => LibraryController(library, store, remoteBooks)..refresh(),

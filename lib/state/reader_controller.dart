@@ -10,6 +10,7 @@ import '../models/book.dart';
 import '../models/chapter_audio.dart';
 import '../models/reading_progress.dart';
 import '../models/sentence.dart';
+import '../services/audio_cache.dart';
 import '../services/library_repository.dart';
 import '../services/now_playing_art.dart';
 import '../services/paginator.dart';
@@ -42,6 +43,10 @@ class _QueuedChapter {
 
   final _ChapterData chapter;
   final ChapterAudio audio;
+
+  /// Whether the player is streaming this chapter rather than playing it
+  /// from the cache — set when its source is made ([ReaderController._source]).
+  bool streaming = false;
 
   /// What is being read at [position] into this chapter's audio: the
   /// timeline chunk, and the sentence the narration has got to within it.
@@ -84,10 +89,12 @@ class ReaderController extends ChangeNotifier {
   ReaderController({
     required Book book,
     required LibraryRepository library,
+    required AudioCache audioCache,
     required SettingsStore store,
     required AppSettings settings,
   })  : _book = book,
         _library = library,
+        _audioCache = audioCache,
         _store = store,
         _settings = settings {
     _settings.addListener(_onSettingsChanged);
@@ -108,6 +115,16 @@ class ReaderController extends ChangeNotifier {
 
   Book _book;
   final LibraryRepository _library;
+  final AudioCache _audioCache;
+
+  /// Once this share of the playing chapter has been heard, the next one
+  /// starts downloading.
+  static const _prefetchAt = 0.8;
+
+  /// The next chapter joins the playlist once its file is on disk, or at the
+  /// latest when this much is left — then streamed, if the download hasn't
+  /// finished.
+  static const _queueLead = Duration(seconds: 30);
   final SettingsStore _store;
   final AppSettings _settings;
 
@@ -154,6 +171,12 @@ class ReaderController extends ChangeNotifier {
 
   /// Session whose [_extendQueue] is in flight, so it never runs twice.
   int? _extendingSession;
+
+  /// The next chapter being fetched ahead of time ([_prefetchNext]): its
+  /// index, the chapter response, and whether its audio is on disk yet.
+  int? _prefetchIndex;
+  Future<_QueuedChapter?>? _prefetch;
+  bool _nextCached = false;
 
   /// Set once nothing more will be appended: the book ran out, or the next
   /// chapter can't be played ([_blockedChapter], [_blockedMessage]).
@@ -457,11 +480,16 @@ class ReaderController extends ChangeNotifier {
     _safeNotify();
 
     // Paused in the chapter still on screen: carry on from the cursor, which
-    // may have moved since (a swipe to another page while paused).
+    // may have moved since (a swipe to another page while paused). A file
+    // on disk doesn't care that the URL has expired since.
     final item = _currentItem;
     if (item != null &&
         item.chapter.index == _chapterIndex &&
-        item.audio.isFresh()) {
+        (item.audio.isFresh() || !item.streaming)) {
+      if (await _canSwitchToFile(item)) {
+        await _startAt(reuse: item);
+        return;
+      }
       if (item.readingAt(_player.position).sentence != _cursor) {
         await _player.seek(item.startOf(_cursor));
       }
@@ -473,7 +501,10 @@ class ReaderController extends ChangeNotifier {
 
   /// Rebuilds the playlist from the chapter on screen, starting at the
   /// cursor.
-  Future<void> _startAt({bool forceRefresh = false}) async {
+  ///
+  /// [reuse] is the chapter as already loaded, to switch it from streaming
+  /// to its cached file without asking the API for it again.
+  Future<void> _startAt({bool forceRefresh = false, _QueuedChapter? reuse}) async {
     final session = ++_session;
     bool live() => session == _session && !_disposed;
 
@@ -485,7 +516,7 @@ class ReaderController extends ChangeNotifier {
 
     final _QueuedChapter? item;
     try {
-      item = await _loadQueued(_chapterIndex, forceRefresh: forceRefresh);
+      item = reuse ?? await _loadQueued(_chapterIndex, forceRefresh: forceRefresh);
     } on Object catch (e) {
       if (!live()) return;
       _error = _describe(e);
@@ -508,6 +539,8 @@ class ReaderController extends ChangeNotifier {
     }
 
     _queue.add(item);
+    _markInUse();
+    _resetPrefetch();
     _queueDone = false;
     _blockedChapter = null;
     _blockedMessage = null;
@@ -525,7 +558,7 @@ class ReaderController extends ChangeNotifier {
     }
     if (!live()) return;
     if (_playing) unawaited(_player.play());
-    unawaited(_extendQueue(session));
+    _lookAhead();
   }
 
   /// [index]'s narration, ready to queue — null when it has none. Uses the
@@ -567,7 +600,7 @@ class ReaderController extends ChangeNotifier {
           // Known to have no narration: no need to ask the server again.
           item = _book.chapters[nextIndex].hasAudio == false
               ? null
-              : await _loadQueued(nextIndex);
+              : await _takePrefetched(nextIndex);
           if (item == null) message = 'Chương này chưa có bản đọc.';
         } on LoginRequiredException {
           // The chapter itself explains this once it is shown.
@@ -586,6 +619,7 @@ class ReaderController extends ChangeNotifier {
           final starved =
               _player.processingState == ProcessingState.completed;
           _queue.add(item);
+          _markInUse();
           await _player.addAudioSource(await _source(item));
           // The player ran dry and stopped at the end of the last chapter;
           // it does not move on by itself when more is added.
@@ -608,18 +642,105 @@ class ReaderController extends ChangeNotifier {
     }
   }
 
+  /// Plays [item] from disk when it's cached. Otherwise streams it, while the
+  /// whole file downloads in the background — ahead of the player, so the
+  /// rest of the chapter is on disk by the time the narration gets there,
+  /// and it plays from disk next time.
   Future<AudioSource> _source(_QueuedChapter item) async {
     final chapter = _book.chapters[item.chapter.index];
-    return AudioSource.uri(
-      item.audio.url,
-      tag: MediaItem(
-        id: '${_book.id}/${item.chapter.index}',
-        title: chapter.title,
-        album: _book.title,
-        duration: Duration(milliseconds: item.audio.durationMs),
-        artUri: await nowPlayingArt(),
-      ),
+    final tag = MediaItem(
+      id: '${_book.id}/${item.chapter.index}',
+      title: chapter.title,
+      album: _book.title,
+      duration: Duration(milliseconds: item.audio.durationMs),
+      artUri: await nowPlayingArt(),
     );
+    final cached = await _audioCache.cachedFile(item.audio);
+    item.streaming = cached == null;
+    if (cached != null) {
+      unawaited(_audioCache.touch(item.audio));
+      return AudioSource.file(cached.path, tag: tag);
+    }
+    unawaited(_audioCache.fetch(item.audio));
+    return AudioSource.uri(item.audio.url, tag: tag);
+  }
+
+  /// Whether [item] is being streamed although its file has finished
+  /// downloading since. Switching then costs a moment's rebuffering, so it is
+  /// only done where playback restarts anyway: a jump to another sentence,
+  /// or resuming after a pause.
+  Future<bool> _canSwitchToFile(_QueuedChapter item) async =>
+      item.streaming && await _audioCache.cachedFile(item.audio) != null;
+
+  /// Keeps the chapters in the playlist from being evicted from the cache.
+  void _markInUse() {
+    _audioCache.inUse = {for (final q in _queue) q.audio.cacheKey};
+  }
+
+  /// Near the end of the last chapter in the playlist: starts fetching the
+  /// next one, and queues it once it's on disk or time is running out.
+  void _lookAhead() {
+    if (!_playing || _queueDone || _queue.isEmpty || _disposed) return;
+    final playingIndex = _player.currentIndex ?? 0;
+    if (_queue.length - playingIndex > 1) return;
+
+    final current = _queue.last;
+    final duration = Duration(milliseconds: current.audio.durationMs);
+    final position = _player.position;
+    final remaining = duration - position;
+    // An unknown duration (0) counts as already there.
+    if (position >= duration * _prefetchAt) {
+      _prefetchNext(current.chapter.index + 1);
+    }
+    if (remaining <= _queueLead || _nextCached) {
+      unawaited(_extendQueue(_session));
+    }
+  }
+
+  /// Fetches chapter [index] — its text and timeline, then its audio file —
+  /// ahead of time, for [_extendQueue] to pick up.
+  void _prefetchNext(int index) {
+    if (_prefetchIndex == index ||
+        index >= _book.chapterCount ||
+        _book.chapters[index].hasAudio == false) {
+      return;
+    }
+    final session = _session;
+    _prefetchIndex = index;
+    _nextCached = false;
+    final prefetch = _prefetch = _loadQueued(index);
+    unawaited(prefetch.then((item) async {
+      if (item == null) return;
+      final file = await _audioCache.fetch(item.audio);
+      if (file != null && session == _session && _prefetchIndex == index) {
+        _nextCached = true;
+        _lookAhead();
+      }
+    }, onError: (Object _) {
+      // _extendQueue gets the same error when it takes this prefetch, and
+      // handles it there.
+    }));
+  }
+
+  /// Chapter [index] as fetched ahead of time, or freshly if it wasn't (or
+  /// its URL went stale before its audio made it to disk).
+  Future<_QueuedChapter?> _takePrefetched(int index) async {
+    final prefetch = _prefetchIndex == index ? _prefetch : null;
+    _resetPrefetch();
+    if (prefetch == null) return _loadQueued(index);
+    final item = await prefetch;
+    if (item == null) return null; // No narration.
+    if (item.audio.isFresh() ||
+        await _audioCache.cachedFile(item.audio) != null) {
+      return item;
+    }
+    return _loadQueued(index, forceRefresh: true);
+  }
+
+  void _resetPrefetch() {
+    _prefetchIndex = null;
+    _prefetch = null;
+    _nextCached = false;
   }
 
   _QueuedChapter? get _currentItem {
@@ -630,11 +751,13 @@ class ReaderController extends ChangeNotifier {
   void _onPlayerIndex(int? index) {
     if (index == null || index >= _queue.length || _disposed) return;
     _syncCursor();
-    unawaited(_extendQueue(_session));
+    _lookAhead();
   }
 
   void _onPosition(Duration _) {
-    if (_playing) _syncCursor();
+    if (!_playing) return;
+    _syncCursor();
+    _lookAhead();
   }
 
   /// Moves the highlight (and, when listening ran into the next chapter, the
@@ -755,6 +878,8 @@ class ReaderController extends ChangeNotifier {
 
   Future<void> _clearQueue() async {
     _queue.clear();
+    _markInUse();
+    _resetPrefetch();
     await _player.clearAudioSources();
   }
 
@@ -793,7 +918,12 @@ class ReaderController extends ChangeNotifier {
 
     final item = _currentItem;
     if (item != null && item.chapter.index == _chapterIndex) {
-      await _player.seek(item.startOf(_cursor), index: _player.currentIndex);
+      if (await _canSwitchToFile(item)) {
+        // The seek would rebuffer anyway: do it from the file on disk.
+        await _startAt(reuse: item);
+      } else {
+        await _player.seek(item.startOf(_cursor), index: _player.currentIndex);
+      }
     } else {
       await _startAt();
     }

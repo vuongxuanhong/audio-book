@@ -33,12 +33,21 @@ class ChapterAudio {
     required this.durationMs,
     required this.mimeType,
     required this.timeline,
+    this.sizeBytes = 0,
   });
 
   final Uri url;
   final DateTime urlExpiresAt;
   final int durationMs;
   final String mimeType;
+
+  /// Size of the audio file; 0 when the server didn't say.
+  final int sizeBytes;
+
+  /// Identifies the audio file itself, independent of the signature in
+  /// [url]'s query, which changes every few minutes. The backend's keys are
+  /// content-hashed, so regenerated audio gets a new one.
+  String get cacheKey => url.path;
 
   /// Sorted by [TimelineChunk.timeMs], never empty.
   final List<TimelineChunk> timeline;
@@ -67,6 +76,7 @@ class ChapterAudio {
       durationMs: json['duration_ms'] as int? ?? 0,
       mimeType: json['mime_type'] as String? ?? 'audio/mp4',
       timeline: chunks,
+      sizeBytes: json['size_bytes'] as int? ?? 0,
     );
   }
 }

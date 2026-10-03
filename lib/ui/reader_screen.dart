@@ -7,6 +7,7 @@ import 'package:real_page_flip/real_page_flip.dart';
 
 import '../models/book.dart';
 import '../models/sentence.dart';
+import '../services/audio_cache.dart';
 import '../services/device_auth.dart';
 import '../services/library_repository.dart';
 import '../services/paginator.dart';
@@ -29,6 +30,7 @@ class ReaderScreen extends StatelessWidget {
       create: (_) => ReaderController(
         book: book,
         library: context.read<LibraryRepository>(),
+        audioCache: context.read<AudioCache>(),
         store: context.read<SettingsStore>(),
         settings: context.read<AppSettings>(),
       ),
