@@ -6,7 +6,7 @@ import '../about_screen.dart';
 import 'theme_mode_selector.dart';
 
 /// The app's own settings, reachable outside of any open book — today just
-/// the theme and a link to the About screen. Reading-specific controls (speed, font, pacing) live in
+/// the theme and a link to the About screen. Reading-specific controls (speed, page following) live in
 /// `reader_settings_sheet.dart` instead, since they only make sense with a
 /// book open.
 Future<void> showAppSettingsSheet(BuildContext context) {

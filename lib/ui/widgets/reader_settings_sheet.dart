@@ -3,7 +3,6 @@ import 'package:provider/provider.dart';
 
 import '../../state/app_settings.dart';
 import '../../state/reader_controller.dart';
-import 'theme_mode_selector.dart';
 
 /// Must be called from inside the reader: the sheet is its own route, so the
 /// [ReaderController] is handed over explicitly.
@@ -37,13 +36,6 @@ class _ReaderSettings extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Giao diện', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 12),
-            ThemeModeSelector(
-              value: settings.themeMode,
-              onChanged: settings.setThemeMode,
-            ),
-            const Divider(height: 28),
             Text('Tốc độ đọc', style: Theme.of(context).textTheme.titleMedium),
             if (!canListen && reader.listenUnavailableReason != null) ...[
               const SizedBox(height: 4),
@@ -57,24 +49,6 @@ class _ReaderSettings extends StatelessWidget {
             const Divider(height: 28),
             Text('Hiển thị', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
-            _Slider(
-              label: 'Cỡ chữ',
-              value: settings.fontSize,
-              min: 12,
-              max: 34,
-              divisions: 22,
-              display: settings.fontSize.toStringAsFixed(0),
-              onChanged: settings.setFontSize,
-            ),
-            _Slider(
-              label: 'Giãn dòng',
-              value: settings.lineHeight,
-              min: 1.2,
-              max: 2.4,
-              divisions: 12,
-              display: settings.lineHeight.toStringAsFixed(1),
-              onChanged: settings.setLineHeight,
-            ),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text('Tự động lật trang theo câu đang đọc'),
@@ -124,44 +98,4 @@ class _SpeedSlider extends StatelessWidget {
 
   static String _fmt(double v) =>
       v == v.roundToDouble() ? v.toStringAsFixed(1) : v.toString();
-}
-
-class _Slider extends StatelessWidget {
-  const _Slider({
-    required this.label,
-    required this.value,
-    required this.min,
-    required this.max,
-    required this.divisions,
-    required this.display,
-    required this.onChanged,
-  });
-
-  final String label;
-  final double value;
-  final double min;
-  final double max;
-  final int divisions;
-  final String display;
-  final ValueChanged<double> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        SizedBox(width: 108, child: Text(label)),
-        Expanded(
-          child: Slider(
-            value: value,
-            min: min,
-            max: max,
-            divisions: divisions,
-            label: display,
-            onChanged: onChanged,
-          ),
-        ),
-        SizedBox(width: 40, child: Text(display, textAlign: TextAlign.end)),
-      ],
-    );
-  }
 }

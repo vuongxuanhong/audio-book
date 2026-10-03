@@ -5,7 +5,7 @@ import '../../state/reader_controller.dart';
 import 'reader_settings_sheet.dart';
 
 /// The bar pinned to the bottom of the reader: play/pause, chapter progress,
-/// and everything else (speed, font, pacing) tucked behind one settings
+/// and everything else (speed, page following) tucked behind one settings
 /// button. Chapter/sentence navigation lives in the swipe gestures and the
 /// chapter picker, not as buttons here — listening only needs to start,
 /// stop, see how far along it is, and open settings.

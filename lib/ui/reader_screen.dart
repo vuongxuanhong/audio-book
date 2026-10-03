@@ -492,6 +492,23 @@ class _TopBar extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
+            // Shows the mode a tap switches to. Choosing it here sets it
+            // explicitly, overriding "follow the system" until changed again
+            // in the library's settings.
+            if (theme.brightness == Brightness.light)
+              IconButton(
+                tooltip: 'Giao diện tối',
+                icon: const Icon(Icons.dark_mode_outlined),
+                onPressed: () =>
+                    context.read<AppSettings>().setThemeMode(ThemeMode.dark),
+              )
+            else
+              IconButton(
+                tooltip: 'Giao diện sáng',
+                icon: const Icon(Icons.light_mode_outlined),
+                onPressed: () =>
+                    context.read<AppSettings>().setThemeMode(ThemeMode.light),
+              ),
             IconButton(
               tooltip: 'Mục lục',
               icon: const Icon(Icons.list_alt),
