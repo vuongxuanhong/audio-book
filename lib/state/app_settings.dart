@@ -5,7 +5,7 @@ import '../services/settings_store.dart';
 
 class AppSettings extends ChangeNotifier {
   AppSettings(this._store)
-      : _speed = _store.speed,
+      : _speed = nearestSpeed(_store.speed),
         _fontSize = _store.fontSize,
         _lineHeight = _store.lineHeight,
         _autoScroll = _store.autoScroll,
@@ -25,21 +25,21 @@ class AppSettings extends ChangeNotifier {
   bool get autoScroll => _autoScroll;
   ThemeMode get themeMode => _themeMode;
 
-  static const speedSteps = <double>[0.5, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0];
+  /// The reading speeds on offer.
+  static const speedSteps = <double>[0.75, 1.0, 1.25, 1.5];
+
+  /// The offered speed closest to [value] — e.g. a speed saved by an earlier
+  /// version, which offered more of them.
+  static double nearestSpeed(double value) => speedSteps.reduce(
+        (best, s) => (s - value).abs() < (best - value).abs() ? s : best,
+      );
 
   void setSpeed(double value) {
-    final clamped = value.clamp(0.5, 2.0).toDouble();
-    if (clamped == _speed) return;
-    _speed = clamped;
-    _store.setSpeed(clamped);
+    final speed = nearestSpeed(value);
+    if (speed == _speed) return;
+    _speed = speed;
+    _store.setSpeed(speed);
     notifyListeners();
-  }
-
-  /// Cycles to the next preset — what the little "1.25×" chip in the player
-  /// bar does.
-  void nextSpeed() {
-    final i = speedSteps.indexWhere((s) => s > _speed + 0.001);
-    setSpeed(i == -1 ? speedSteps.first : speedSteps[i]);
   }
 
   void setFontSize(double value) {

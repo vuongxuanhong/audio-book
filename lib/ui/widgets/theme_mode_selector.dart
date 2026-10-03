@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 
-/// A light/dark/system picker, shared by the reader's settings sheet and the
-/// library's own settings so the choice reads and writes the same
-/// [ThemeMode] wherever it's changed from.
+/// A light/dark/system picker, for the library's settings. (The reader has a
+/// plain light/dark toggle in its top bar instead.)
 class ThemeModeSelector extends StatelessWidget {
   const ThemeModeSelector({
     super.key,

@@ -45,7 +45,7 @@ class _ReaderSettings extends StatelessWidget {
               ),
             ],
             const SizedBox(height: 12),
-            _SpeedSlider(settings: settings, enabled: canListen),
+            _SpeedSelector(settings: settings, enabled: canListen),
             const Divider(height: 28),
             Text('Hiển thị', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
@@ -62,40 +62,32 @@ class _ReaderSettings extends StatelessWidget {
   }
 }
 
-/// Speed only has a fixed, unevenly-spaced set of steps (see
-/// [AppSettings.speedSteps]), so this drags an index into that list rather
-/// than a continuous value.
-class _SpeedSlider extends StatelessWidget {
-  const _SpeedSlider({required this.settings, required this.enabled});
+/// One button per speed in [AppSettings.speedSteps].
+class _SpeedSelector extends StatelessWidget {
+  const _SpeedSelector({required this.settings, required this.enabled});
 
   final AppSettings settings;
   final bool enabled;
 
   @override
   Widget build(BuildContext context) {
-    final steps = AppSettings.speedSteps;
-    final index = steps.indexWhere((s) => (s - settings.speed).abs() < 0.001);
-    final display = '${_fmt(settings.speed)}×';
-
-    return Row(
-      children: [
-        const SizedBox(width: 108, child: Text('Tốc độ')),
-        Expanded(
-          child: Slider(
-            value: (index == -1 ? 3 : index).toDouble(),
-            min: 0,
-            max: (steps.length - 1).toDouble(),
-            divisions: steps.length - 1,
-            label: display,
-            onChanged:
-                enabled ? (v) => settings.setSpeed(steps[v.round()]) : null,
-          ),
-        ),
-        SizedBox(width: 40, child: Text(display, textAlign: TextAlign.end)),
-      ],
+    return SizedBox(
+      width: double.infinity,
+      child: SegmentedButton<double>(
+        segments: [
+          for (final speed in AppSettings.speedSteps)
+            ButtonSegment(value: speed, label: Text(_label(speed))),
+        ],
+        selected: {settings.speed},
+        showSelectedIcon: false,
+        onSelectionChanged: enabled
+            ? (selection) => settings.setSpeed(selection.first)
+            : null,
+      ),
     );
   }
 
-  static String _fmt(double v) =>
-      v == v.roundToDouble() ? v.toStringAsFixed(1) : v.toString();
+  /// 1.0 → "1.0×", 0.75 → "0.75×".
+  static String _label(double v) =>
+      '${v == v.roundToDouble() ? v.toStringAsFixed(1) : v}×';
 }
